@@ -1,10 +1,10 @@
 /**
  * Web Research Provider Priority Resolution
  *
- * Single central resolver for Web Research provider priority.
+ * Single central resolver for Web Research provider priority and execution chain.
  * Reads WEB_RESEARCH_PROVIDER_PRIORITY, validates against allowlist,
- * deduplicates, removes unknown engines, and separates OmniRoute subproviders
- * from direct fallbacks (such as local SearXNG).
+ * deduplicates, removes unknown engines, and groups consecutive OmniRoute
+ * subproviders without altering the relative execution order with direct fallbacks.
  */
 
 export const DEFAULT_RESEARCH_PRIORITY = [
@@ -41,15 +41,71 @@ export const ALLOWED_RESEARCH_PROVIDERS = new Set([
   ...DIRECT_FALLBACK_PROVIDERS,
 ]);
 
+export type ChainSegment =
+  | { type: "omniroute"; subProviders: string[] }
+  | { type: "searxng" }
+  | { type: "brave" };
+
 export interface EffectiveResearchPriority {
   fullPriority: string[];
   omnirouteSubProviders: string[];
   directFallbacks: string[];
   primaryProvider: string;
+  chainSegments: ChainSegment[];
+  chainDescription: string[];
 }
 
 /**
- * Resolves the effective provider priority.
+ * Builds consecutive chain segments preserving relative order.
+ * Consecutive OmniRoute subproviders are grouped into a single segment.
+ */
+export function buildChainSegments(fullPriority: string[]): ChainSegment[] {
+  const segments: ChainSegment[] = [];
+
+  for (const provider of fullPriority) {
+    if (OMNIROUTE_SUBPROVIDERS.has(provider)) {
+      const last = segments[segments.length - 1];
+      if (last && last.type === "omniroute") {
+        last.subProviders.push(provider);
+      } else {
+        segments.push({
+          type: "omniroute",
+          subProviders: [provider],
+        });
+      }
+    } else if (provider === "searxng") {
+      segments.push({ type: "searxng" });
+    } else if (provider === "brave") {
+      segments.push({ type: "brave" });
+    }
+  }
+
+  return segments;
+}
+
+/**
+ * Formats user-readable descriptions for chain segments:
+ * e.g. "OmniRoute(firecrawl → ollama-search)", "SearXNG", "Brave"
+ */
+export function formatChainDescription(segments: ChainSegment[]): string[] {
+  return segments.map((seg) => {
+    if (seg.type === "omniroute") {
+      return seg.subProviders.length > 1
+        ? `OmniRoute(${seg.subProviders.join(" → ")})`
+        : `OmniRoute(${seg.subProviders[0]})`;
+    }
+    if (seg.type === "searxng") {
+      return "SearXNG";
+    }
+    if (seg.type === "brave") {
+      return "Brave";
+    }
+    return String((seg as any).type);
+  });
+}
+
+/**
+ * Resolves the effective provider priority and execution chain.
  * Accepts an optional string to facilitate deterministic testing or dynamic overrides.
  */
 export function resolveResearchProviderPriority(
@@ -79,7 +135,7 @@ export function resolveResearchProviderPriority(
     }
   }
 
-  // Fallback to safe default if empty or all tokens were unknown
+  // Fallback to safe default ONLY if empty or all tokens were unknown
   if (validatedPriority.length === 0) {
     validatedPriority = [...DEFAULT_RESEARCH_PRIORITY];
   }
@@ -95,15 +151,15 @@ export function resolveResearchProviderPriority(
     }
   }
 
-  // Ensure OmniRoute subproviders has at least firecrawl as safety default if none present
-  if (omnirouteSubProviders.length === 0) {
-    omnirouteSubProviders.push("firecrawl");
-  }
+  const chainSegments = buildChainSegments(validatedPriority);
+  const chainDescription = formatChainDescription(chainSegments);
 
   return {
     fullPriority: validatedPriority,
     omnirouteSubProviders,
     directFallbacks,
     primaryProvider: validatedPriority[0] || "firecrawl",
+    chainSegments,
+    chainDescription,
   };
 }

@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { resolveResearchPolicy } from "../../src/lib/ai/research/research-policy";
 import { resolveResearchProviderPriority } from "../../src/lib/ai/research/provider-priority";
+import { ResearchOrchestrator } from "../../src/lib/ai/research/research-orchestrator";
 import { ResearchIntentAnalyzer } from "../../src/lib/ai/research/research-intent";
 import { SourceRanking } from "../../src/lib/ai/research/source-ranking";
 import { ResearchContextBuilder } from "../../src/lib/ai/research/research-context-builder";
@@ -37,6 +38,10 @@ describe("Web-First Research — Provider Priority Resolution", () => {
       assert.deepStrictEqual(priority.omnirouteSubProviders, ["firecrawl", "ollama-search"]);
       assert.deepStrictEqual(priority.directFallbacks, ["searxng"]);
       assert.strictEqual(priority.primaryProvider, "firecrawl");
+      assert.deepStrictEqual(priority.chainDescription, [
+        "OmniRoute(firecrawl → ollama-search)",
+        "SearXNG",
+      ]);
     } finally {
       if (orig !== undefined) process.env.WEB_RESEARCH_PROVIDER_PRIORITY = orig;
     }
@@ -48,6 +53,10 @@ describe("Web-First Research — Provider Priority Resolution", () => {
     assert.deepStrictEqual(priority.omnirouteSubProviders, ["ollama-search", "firecrawl"]);
     assert.deepStrictEqual(priority.directFallbacks, ["searxng"]);
     assert.strictEqual(priority.primaryProvider, "ollama-search");
+    assert.deepStrictEqual(priority.chainDescription, [
+      "OmniRoute(ollama-search → firecrawl)",
+      "SearXNG",
+    ]);
   });
 
   it("env com duplicados -> deduplicado", () => {
@@ -73,6 +82,107 @@ describe("Web-First Research — Provider Priority Resolution", () => {
     assert.deepStrictEqual(priority.fullPriority, ["serper-search", "searxng", "firecrawl", "brave"]);
     assert.deepStrictEqual(priority.omnirouteSubProviders, ["serper-search", "firecrawl"]);
     assert.deepStrictEqual(priority.directFallbacks, ["searxng", "brave"]);
+  });
+
+  // 5 required chain preservation cases:
+  it("caso 1: firecrawl,ollama-search,searxng => OmniRoute(firecrawl → ollama-search) → SearXNG", () => {
+    const priority = resolveResearchProviderPriority("firecrawl,ollama-search,searxng");
+    assert.deepStrictEqual(priority.chainDescription, [
+      "OmniRoute(firecrawl → ollama-search)",
+      "SearXNG",
+    ]);
+
+    const orig = process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    process.env.WEB_RESEARCH_PROVIDER_PRIORITY = "firecrawl,ollama-search,searxng";
+    try {
+      const chain = ResearchOrchestrator.getProviderChain();
+      assert.strictEqual(chain.length, 2);
+      assert.strictEqual(chain[0].name, "omniroute");
+      assert.strictEqual(chain[1].name, "searxng");
+    } finally {
+      if (orig !== undefined) process.env.WEB_RESEARCH_PROVIDER_PRIORITY = orig;
+      else delete process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    }
+  });
+
+  it("caso 2: searxng,firecrawl,ollama-search => SearXNG → OmniRoute(firecrawl → ollama-search)", () => {
+    const priority = resolveResearchProviderPriority("searxng,firecrawl,ollama-search");
+    assert.deepStrictEqual(priority.chainDescription, [
+      "SearXNG",
+      "OmniRoute(firecrawl → ollama-search)",
+    ]);
+
+    const orig = process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    process.env.WEB_RESEARCH_PROVIDER_PRIORITY = "searxng,firecrawl,ollama-search";
+    try {
+      const chain = ResearchOrchestrator.getProviderChain();
+      assert.strictEqual(chain.length, 2);
+      assert.strictEqual(chain[0].name, "searxng");
+      assert.strictEqual(chain[1].name, "omniroute");
+    } finally {
+      if (orig !== undefined) process.env.WEB_RESEARCH_PROVIDER_PRIORITY = orig;
+      else delete process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    }
+  });
+
+  it("caso 3: firecrawl,searxng,ollama-search => OmniRoute(firecrawl) → SearXNG → OmniRoute(ollama-search)", () => {
+    const priority = resolveResearchProviderPriority("firecrawl,searxng,ollama-search");
+    assert.deepStrictEqual(priority.chainDescription, [
+      "OmniRoute(firecrawl)",
+      "SearXNG",
+      "OmniRoute(ollama-search)",
+    ]);
+
+    const orig = process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    process.env.WEB_RESEARCH_PROVIDER_PRIORITY = "firecrawl,searxng,ollama-search";
+    try {
+      const chain = ResearchOrchestrator.getProviderChain();
+      assert.strictEqual(chain.length, 3);
+      assert.strictEqual(chain[0].name, "omniroute");
+      assert.strictEqual(chain[1].name, "searxng");
+      assert.strictEqual(chain[2].name, "omniroute");
+    } finally {
+      if (orig !== undefined) process.env.WEB_RESEARCH_PROVIDER_PRIORITY = orig;
+      else delete process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    }
+  });
+
+  it("caso 4: searxng => SearXNG somente (não reintroduz Firecrawl)", () => {
+    const priority = resolveResearchProviderPriority("searxng");
+    assert.deepStrictEqual(priority.fullPriority, ["searxng"]);
+    assert.deepStrictEqual(priority.omnirouteSubProviders, []);
+    assert.deepStrictEqual(priority.directFallbacks, ["searxng"]);
+    assert.deepStrictEqual(priority.chainDescription, ["SearXNG"]);
+
+    const orig = process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    process.env.WEB_RESEARCH_PROVIDER_PRIORITY = "searxng";
+    try {
+      const chain = ResearchOrchestrator.getProviderChain();
+      assert.strictEqual(chain.length, 1);
+      assert.strictEqual(chain[0].name, "searxng");
+    } finally {
+      if (orig !== undefined) process.env.WEB_RESEARCH_PROVIDER_PRIORITY = orig;
+      else delete process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    }
+  });
+
+  it("caso 5: ollama-search => OmniRoute(ollama-search) somente", () => {
+    const priority = resolveResearchProviderPriority("ollama-search");
+    assert.deepStrictEqual(priority.fullPriority, ["ollama-search"]);
+    assert.deepStrictEqual(priority.omnirouteSubProviders, ["ollama-search"]);
+    assert.deepStrictEqual(priority.directFallbacks, []);
+    assert.deepStrictEqual(priority.chainDescription, ["OmniRoute(ollama-search)"]);
+
+    const orig = process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    process.env.WEB_RESEARCH_PROVIDER_PRIORITY = "ollama-search";
+    try {
+      const chain = ResearchOrchestrator.getProviderChain();
+      assert.strictEqual(chain.length, 1);
+      assert.strictEqual(chain[0].name, "omniroute");
+    } finally {
+      if (orig !== undefined) process.env.WEB_RESEARCH_PROVIDER_PRIORITY = orig;
+      else delete process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    }
   });
 });
 

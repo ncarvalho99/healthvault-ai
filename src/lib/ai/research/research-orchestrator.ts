@@ -55,27 +55,25 @@ export class ResearchOrchestrator {
       ];
     }
 
-    // Default chain configured by resolved priority
+    // Build chain according to resolved priority segments
     const priorityInfo = resolveResearchProviderPriority();
     const chain: WebResearchProvider[] = [];
 
-    if (priorityInfo.omnirouteSubProviders.length > 0) {
-      chain.push(
-        new OmniRouteSearchProvider({
-          baseUrl: options?.omnirouteBaseUrl,
-          apiKey: options?.omnirouteApiKey,
-          defaultSubProvider: priorityInfo.omnirouteSubProviders[0],
-          subProviderPriority: priorityInfo.omnirouteSubProviders,
-        })
-      );
-    }
-
-    if (priorityInfo.directFallbacks.includes("searxng")) {
-      chain.push(new SearXNGProvider());
-    }
-
-    if (priorityInfo.directFallbacks.includes("brave") || process.env.BRAVE_SEARCH_API_KEY) {
-      chain.push(new BraveSearchProvider());
+    for (const seg of priorityInfo.chainSegments) {
+      if (seg.type === "omniroute") {
+        chain.push(
+          new OmniRouteSearchProvider({
+            baseUrl: options?.omnirouteBaseUrl,
+            apiKey: options?.omnirouteApiKey,
+            defaultSubProvider: seg.subProviders[0],
+            subProviderPriority: seg.subProviders,
+          })
+        );
+      } else if (seg.type === "searxng") {
+        chain.push(new SearXNGProvider());
+      } else if (seg.type === "brave") {
+        chain.push(new BraveSearchProvider());
+      }
     }
 
     return chain;

@@ -125,6 +125,7 @@ export async function GET(req: NextRequest) {
     priority: priorityInfo.fullPriority,
     omnirouteSubProviders: priorityInfo.omnirouteSubProviders,
     directFallbacks: priorityInfo.directFallbacks,
+    executedChain: priorityInfo.chainDescription,
     providers: {
       omniroute: omnirouteHealth,
       searxng: searxngHealth,

@@ -141,13 +141,18 @@ export default function RuntimeStatusPage() {
                     Cadeia de aquisição externa de evidências científicas e médicas com failover automático e ranking de autoridade.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-800/60 font-semibold">
                     Gateway: OmniRoute Search
                   </span>
                   {data.researchInfo?.priority && (
                     <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 text-slate-300 border border-slate-800 hidden sm:inline">
-                      Prioridade: {data.researchInfo.priority.join(" → ")}
+                      Prioridade Configurada: {data.researchInfo.priority.join(" → ")}
+                    </span>
+                  )}
+                  {data.researchInfo?.executedChain && (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-blue-950/70 text-blue-300 border border-blue-800/60 hidden sm:inline">
+                      Cadeia Executada: {data.researchInfo.executedChain.join(" → ")}
                     </span>
                   )}
                 </div>
