@@ -30,6 +30,13 @@
    - Dual-stage suppression: client-side filtering of `<think>`/`<thinking>` tags and intermediate tool-loop reasoning sanitization.
    - Root completion token telemetry tracking `prompt_tokens`, `completion_tokens`, and `reasoning_tokens`.
    - Diagnostic A/B reasoning suppression probe. zero frontend exposition.
+7. **Mobile-First Responsive Interface**:
+   - Smooth slide-over navigation drawer with hamburger toggles on mobile screens.
+   - Eliminates sidebar overlap and text wrapping on smartphones.
+8. **Multi-User RBAC & Granular AI Model Authorization**:
+   - Two user roles: `ADMIN` (system configuration, user management, audit trail) and `USER` (strictly isolated personal health vault).
+   - Per-user allowed inference models: admins explicitly assign which combos/models standard users can access.
+   - Self-service password management with Bcrypt hashing and audit logging.
 5. **Comprehensive Health Records**:
    - Medication tracker with titration timelines.
    - Nutrition and meal planning with caloric and macronutrient targets.

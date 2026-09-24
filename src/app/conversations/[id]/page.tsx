@@ -6,9 +6,11 @@ import { Header } from "@/components/layout/Header";
 import { ChatContainer } from "@/components/chat/ChatContainer";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Toast } from "@/components/ui/Toast";
-import { ArrowLeft, MessageSquare, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, MessageSquare, Sparkles, Trash2, Menu } from "lucide-react";
+import { useNav } from "@/components/layout/NavContext";
 
 export default function ConversationDetailPage({ params }: { params: { id: string } }) {
+  const { setMobileOpen } = useNav();
   const [conversation, setConversation] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -83,26 +85,33 @@ export default function ConversationDetailPage({ params }: { params: { id: strin
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-950 overflow-hidden">
       {/* Conversation Top Header */}
-      <div className="h-16 px-6 border-b border-slate-800 bg-slate-900/60 backdrop-blur-md flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="h-16 px-4 sm:px-6 border-b border-slate-800 bg-slate-900/60 backdrop-blur-md flex items-center justify-between shrink-0 gap-2">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <button
+            onClick={() => setMobileOpen(true)}
+            className="md:hidden p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 shrink-0"
+            aria-label="Abrir menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
           <Link
             href="/conversations"
-            className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors shrink-0"
             title="Voltar à lista"
           >
             <ArrowLeft className="w-5 h-5" />
           </Link>
-          <div>
-            <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-              <MessageSquare className="w-4 h-4 text-emerald-400" />
-              {conversation.title}
+          <div className="min-w-0 truncate">
+            <h2 className="text-sm font-bold text-slate-100 flex items-center gap-1.5 truncate">
+              <MessageSquare className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="truncate">{conversation.title}</span>
             </h2>
-            <div className="flex items-center gap-2 text-[11px] text-slate-400">
-              <span>{conversation.messages?.length || 0} mensagens</span>
+            <div className="flex items-center gap-2 text-[11px] text-slate-400 truncate">
+              <span>{conversation.messages?.length || 0} msgs</span>
               {conversation.tags?.length > 0 && (
                 <>
                   <span>•</span>
-                  <span>{conversation.tags.join(", ")}</span>
+                  <span className="truncate">{conversation.tags.join(", ")}</span>
                 </>
               )}
             </div>

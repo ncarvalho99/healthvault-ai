@@ -70,9 +70,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (!integration) {
+      // Fallback to active system integration configured by admin
+      integration = await db.aiIntegration.findFirst({
+        where: { enabled: true },
+        orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+      });
+    }
+
+    if (!integration) {
       return NextResponse.json(
         {
-          error: "Nenhuma integração de IA configurada ou ativa. Configure o OmniRoute em Configurações de IA.",
+          error: "Nenhuma integração de IA configurada ou ativa. Contate o administrador do sistema.",
           code: "NO_AI_INTEGRATION",
         },
         { status: 400 }
@@ -80,6 +88,25 @@ export async function POST(req: NextRequest) {
     }
 
     const activeModel = requestedModel || conversation.activeModel || integration.defaultCombo || integration.defaultModel || "exploit";
+
+    // Enforce model authorization for standard users
+    const dbUser = await db.user.findUnique({
+      where: { id: user!.userId },
+      select: { role: true, allowedModels: true },
+    });
+
+    if (dbUser?.role === "USER") {
+      const allowed = new Set(dbUser.allowedModels || []);
+      if (!allowed.has(activeModel)) {
+        return NextResponse.json(
+          {
+            error: `Você não tem permissão para utilizar o modelo '${activeModel}'. Solicite autorização a um administrador.`,
+            code: "MODEL_NOT_AUTHORIZED",
+          },
+          { status: 403 }
+        );
+      }
+    }
 
     // 3. Save User message
     const userMessage = await db.message.create({

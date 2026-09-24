@@ -6,6 +6,13 @@ export async function GET(req: NextRequest) {
   const { user, errorResponse } = await authenticateRequest(req);
   if (errorResponse) return errorResponse;
 
+  if (user!.role !== "ADMIN") {
+    return NextResponse.json(
+      { error: "Acesso restrito a administradores", code: "FORBIDDEN" },
+      { status: 403 }
+    );
+  }
+
   const url = new URL(req.url);
   const limit = Math.min(parseInt(url.searchParams.get("limit") || "50", 10), 100);
   const action = url.searchParams.get("action");

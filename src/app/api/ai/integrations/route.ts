@@ -19,6 +19,13 @@ export async function GET(req: NextRequest) {
   const { user, errorResponse } = await authenticateRequest(req);
   if (errorResponse) return errorResponse;
 
+  if (user!.role !== "ADMIN") {
+    return NextResponse.json(
+      { error: "Acesso restrito a administradores", code: "FORBIDDEN" },
+      { status: 403 }
+    );
+  }
+
   const integrations = await db.aiIntegration.findMany({
     where: { userId: user!.userId },
     orderBy: { createdAt: "desc" },
@@ -43,6 +50,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const { user, errorResponse } = await authenticateRequest(req);
   if (errorResponse) return errorResponse;
+
+  if (user!.role !== "ADMIN") {
+    return NextResponse.json(
+      { error: "Acesso restrito a administradores", code: "FORBIDDEN" },
+      { status: 403 }
+    );
+  }
 
   try {
     const body = await req.json();

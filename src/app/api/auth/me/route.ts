@@ -14,6 +14,7 @@ export async function GET(req: NextRequest) {
       email: true,
       fullName: true,
       role: true,
+      allowedModels: true,
       createdAt: true,
       lastLoginAt: true,
     },

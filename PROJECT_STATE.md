@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 72 testes unitários (`node:test` + `tsx` em 27 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 75 testes unitários (`node:test` + `tsx` em 28 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -145,12 +145,18 @@ E2E_AI_MODEL="exploit"
    - Expansão determinística de queries com direcionamento de autoridade médica (`site:clinicaltrials.gov`, `site:fda.gov`, `site:pubmed...`).
    - Política de Evidência Mínima (`MinimumEvidencePolicy`) que avalia suficiência clínica antes do envio ao modelo.
    - Painel `/settings/runtime` com telemetria por provedor (OmniRoute Search vs SearXNG Fallback) e contador de fontes brutas vs válidas.
+8. **Controle de Acesso (RBAC) & Gestão de Usuários**:
+   - Dois papéis de usuário: **`ADMIN`** (acesso completo ao painel, configurações de IA, criação/gerenciamento de usuários e auditoria) e **`USER`** (acesso restrito exclusivamente aos seus próprios registros clínicos, sem acesso a configurações de IA, auditoria ou outros usuários).
+   - **Autorização Granular de Modelos**: O admin define explicitamente quais modelos e combos do OmniRoute cada usuário `USER` pode utilizar.
+   - **Isolamento de Dados**: Usuários normais visualizam e excluem apenas suas próprias recomendações, medicamentos, dietas, métricas e conversas.
+   - **Alteração de Senha Segura**: Página dedicada em `/settings/password` com validação de senha atual, hash Bcrypt e registro imutável em auditoria.
+   - **Interface Mobile Responsiva**: Drawer deslizante (slide-over) com botão hambúrguer responsivo nos cabeçalhos (`Header.tsx` e tela de chat), eliminando sobreposição da barra lateral em dispositivos móveis.
 
 ---
 
 ## 6. Limitações Conhecidas
 
-1. **Aplicação Single-User na v1**: O banco de dados e as políticas são desenhados para uso pessoal do operador. Embora o modelo relacional suporte isolamento por `userId`, o sistema foi concebido para o operador no homelab.
+1. **Gestão de Sessão**: Cada usuário autenticado opera em seu próprio contexto isolado com cookie `HttpOnly` e RBAC. O usuário `admin` padrão é provisionado automaticamente no seed inicial.
 2. **Pipeline Síncrono Non-Streaming no Chat**: O loop de execução de ferramentas e o filtro de supressão de raciocínio operam de forma síncrona no backend (com indicador visual de status de passos no frontend). Isso garante proteção 100% à prova de vazamento de reasoning e atomicidade de transações antes de entregar a resposta final ao navegador.
 3. **Resolução de Modelos em Redes Privadas**: O endpoint do OmniRoute precisa ser acessível pela rede onde o container do HealthVault está hospedado (validado via túnel ou rede local homelab).
 

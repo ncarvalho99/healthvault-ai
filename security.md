@@ -91,3 +91,11 @@ HealthVault AI manages sensitive personal health information (PHI), clinical rec
 ### 12. Reasoning Sanitization & Zero-Leak Storage
 - Raw model reasoning (including `<think>`, `<thinking>`, and separate reasoning fields) is completely filtered before visible display, before saving to PostgreSQL, and before feeding back to the model during tool loop iterations.
 - Telemetry only captures numeric token counts (`prompt_tokens`, `completion_tokens`, `reasoning_tokens`) from the root completion usage; textual reasoning is never stored in DB or audit logs.
+
+### 13. Role-Based Access Control (RBAC) & Model Access Isolation
+- Users are divided into two distinct roles: `ADMIN` and `USER`.
+- Standard `USER` accounts:
+  - Can only view, query, and delete their own patient records (medications, diets, recommendations, metrics, symptoms, labs, conversations).
+  - Cannot access system audit logs (`/audit` or `/api/audit`), AI integration configurations (`/settings/integrations`), or user management (`/settings/users`).
+  - Can only select and interact with inference models/combos explicitly authorized by the administrator (`allowedModels`). Attempts to execute unauthorized models are rejected with `HTTP 403 Forbidden` (`MODEL_NOT_AUTHORIZED`).
+- Administrator accounts retain complete visibility, credential management, model scoping, and user lifecycle authority. Self-demotion or self-deletion of the last administrator account is strictly prohibited.

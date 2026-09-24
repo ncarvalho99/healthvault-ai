@@ -40,10 +40,13 @@ export async function middleware(req: NextRequest) {
   const token = req.cookies.get("healthvault_session")?.value;
 
   let isAuthenticated = false;
+  let userRole: string | undefined;
+
   if (token) {
     try {
-      await jwtVerify(token, secretKey);
+      const { payload } = await jwtVerify(token, secretKey);
       isAuthenticated = true;
+      userRole = payload?.role as string | undefined;
     } catch {
       isAuthenticated = false;
     }
@@ -66,6 +69,14 @@ export async function middleware(req: NextRequest) {
     // Clear stale cookie if present
     response.cookies.delete("healthvault_session");
     return response;
+  }
+
+  // 4. Role-based Access Control (RBAC): Protect Admin-only routes
+  const ADMIN_PAGES = ["/audit", "/settings/users", "/settings/integrations", "/settings/runtime"];
+  if (ADMIN_PAGES.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+    if (userRole !== "ADMIN") {
+      return NextResponse.redirect(new URL("/", req.url));
+    }
   }
 
   return NextResponse.next();

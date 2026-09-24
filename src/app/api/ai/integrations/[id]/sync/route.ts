@@ -9,6 +9,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const { user, errorResponse } = await authenticateRequest(req);
   if (errorResponse) return errorResponse;
 
+  if (user!.role !== "ADMIN") {
+    return NextResponse.json(
+      { error: "Acesso restrito a administradores", code: "FORBIDDEN" },
+      { status: 403 }
+    );
+  }
+
   const integration = await db.aiIntegration.findFirst({
     where: { id: params.id, userId: user!.userId },
   });
