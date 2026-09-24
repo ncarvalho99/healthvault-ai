@@ -7,6 +7,64 @@ import { HealthService } from "../../services/health-service";
 import { db } from "../../db";
 import { ActorType } from "@prisma/client";
 
+function resolveZodProperty(schema: any): { type: string; description?: string; enum?: string[]; items?: any; properties?: any; required?: string[]; isOptional: boolean } {
+  let isOptional = false;
+  let current = schema;
+  let description = current._def?.description;
+
+  while (
+    current._def?.typeName === "ZodOptional" ||
+    current._def?.typeName === "ZodNullable" ||
+    current._def?.typeName === "ZodDefault"
+  ) {
+    isOptional = true;
+    if (!description && current._def?.description) {
+      description = current._def.description;
+    }
+    current = current._def.innerType || current._def.schema;
+  }
+
+  if (!description && current._def?.description) {
+    description = current._def.description;
+  }
+
+  const typeName = current._def?.typeName;
+
+  if (typeName === "ZodNumber") {
+    return { type: "number", description, isOptional };
+  }
+  if (typeName === "ZodBoolean") {
+    return { type: "boolean", description, isOptional };
+  }
+  if (typeName === "ZodEnum") {
+    return { type: "string", enum: current._def.values, description, isOptional };
+  }
+  if (typeName === "ZodArray") {
+    const itemResolved = resolveZodProperty(current._def.type);
+    const { isOptional: _, ...cleanItem } = itemResolved;
+    return {
+      type: "array",
+      items: cleanItem,
+      description,
+      isOptional,
+    };
+  }
+  if (typeName === "ZodObject") {
+    const shape = current.shape || {};
+    const properties: Record<string, any> = {};
+    const required: string[] = [];
+    for (const [k, s] of Object.entries(shape)) {
+      const res = resolveZodProperty(s);
+      const { isOptional: opt, ...propSchema } = res;
+      properties[k] = propSchema;
+      if (!opt) required.push(k);
+    }
+    return { type: "object", properties, required, description, isOptional };
+  }
+
+  return { type: "string", description, isOptional };
+}
+
 class ToolRegistryClass {
   private tools = new Map<string, HealthVaultTool>();
 
@@ -26,37 +84,15 @@ class ToolRegistryClass {
     const list = toolsList || this.getAll();
 
     return list.map((tool) => {
-      // Generate standard OpenAI JSON schema from tool.inputSchema
       const shape = (tool.inputSchema as any).shape || {};
       const properties: Record<string, any> = {};
       const required: string[] = [];
 
       for (const [key, schema] of Object.entries(shape)) {
-        const zodType = schema as any;
-        const typeName = zodType._def?.typeName;
-
-        let jsonType = "string";
-        let description = zodType._def?.description || "";
-        let enumVals: string[] | undefined = undefined;
-
-        if (typeName === "ZodNumber") {
-          jsonType = "number";
-        } else if (typeName === "ZodBoolean") {
-          jsonType = "boolean";
-        } else if (typeName === "ZodArray") {
-          jsonType = "array";
-        } else if (typeName === "ZodEnum") {
-          jsonType = "string";
-          enumVals = zodType._def?.values;
-        }
-
-        properties[key] = {
-          type: jsonType,
-          description,
-          ...(enumVals ? { enum: enumVals } : {}),
-        };
-
-        if (zodType._def?.typeName !== "ZodOptional" && zodType._def?.typeName !== "ZodNullable") {
+        const resolved = resolveZodProperty(schema);
+        const { isOptional, ...cleanSchema } = resolved;
+        properties[key] = cleanSchema;
+        if (!isOptional) {
           required.push(key);
         }
       }
@@ -808,13 +844,9 @@ ToolRegistry.register({
   enabled: true,
   inputSchema: z.object({}),
   handler: async (ctx) => {
-    // Call internal timeline aggregation
-    const res = await fetch(`http://127.0.0.1:3000/api/timeline`);
-    if (res.ok) {
-      const data = await res.json();
-      return { success: true, data: data.events?.slice(0, 15) || [] };
-    }
-    return { success: true, data: [] };
+    const { TimelineService } = await import("../../services/timeline-service");
+    const events = await TimelineService.getTimeline(ctx.userId, 15);
+    return { success: true, data: events };
   },
 });
 

@@ -22,6 +22,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { LatestRecommendationPanel } from "../recommendations/LatestRecommendationPanel";
+import { MessageContent } from "./MessageContent";
 import { Toast } from "../ui/Toast";
 
 interface MessageVersion {
@@ -423,7 +424,7 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
                   </div>
                 ) : (
                   <>
-                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                    <MessageContent content={msg.content} senderType={msg.senderType} />
 
                     {/* Edit trigger */}
                     <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">

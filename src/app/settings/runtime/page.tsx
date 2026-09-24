@@ -154,22 +154,62 @@ export default function RuntimeStatusPage() {
                           combo
                         </span>
                       </div>
-                      <span className="text-[11px] text-slate-400 block mt-1">
-                        Tool Calling:{" "}
-                        <strong className={m.supportsTools ? "text-emerald-400" : "text-amber-400"}>
-                          {m.supportsTools ? "✓ Suportado" : "Não testado"}
-                        </strong>
-                      </span>
+                      <div className="space-y-1 mt-2 text-[11px] text-slate-400">
+                        <div className="flex justify-between">
+                          <span>Tool Calling:</span>
+                          <strong className={m.supportsTools ? "text-emerald-400" : "text-amber-400"}>
+                            {m.supportsTools ? "✓ Suportado" : "Não testado"}
+                          </strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Reasoning Policy:</span>
+                          <span className={`font-mono font-bold ${m.externalId === "exploit" ? "text-rose-400" : "text-blue-400"}`}>
+                            {m.externalId === "exploit" ? "DISABLED (Filtered)" : "AUTO"}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
-                    <button
-                      onClick={() => handleTestCapability(data.integrations[0].id, m.externalId)}
-                      disabled={testingModel === m.externalId}
-                      className="w-full py-1.5 px-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors"
-                    >
-                      <Zap className={`w-3.5 h-3.5 ${testingModel === m.externalId ? "animate-spin text-amber-400" : "text-emerald-400"}`} />
-                      <span>{testingModel === m.externalId ? "Testando Handshake..." : "Testar Tool Calling"}</span>
-                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => handleTestCapability(data.integrations[0].id, m.externalId)}
+                        disabled={testingModel === m.externalId}
+                        className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-[11px] font-semibold rounded-lg flex items-center justify-center gap-1 transition-colors"
+                        title="Testa tool calling com healthvault_ping"
+                      >
+                        <Zap className={`w-3 h-3 ${testingModel === m.externalId ? "animate-spin text-amber-400" : "text-emerald-400"}`} />
+                        <span>Tools</span>
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          setTestingModel(`${m.externalId}_suppress`);
+                          try {
+                            const res = await fetch("/api/ai/capabilities/test", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                integrationId: data.integrations[0].id,
+                                modelExternalId: m.externalId,
+                                testType: "reasoning_suppression",
+                              }),
+                            });
+                            const r = await res.json();
+                            alert(`Resultado Supressão (${m.externalId}): ${r.suppressionStatus} em ${r.latencyMs}ms`);
+                          } catch (err: any) {
+                            alert("Erro: " + err.message);
+                          } finally {
+                            setTestingModel(null);
+                          }
+                        }}
+                        disabled={testingModel === `${m.externalId}_suppress`}
+                        className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-[11px] font-semibold rounded-lg flex items-center justify-center gap-1 transition-colors"
+                        title="Testa envio de flags de supressão de reasoning para o OmniRoute"
+                      >
+                        <ShieldCheck className="w-3 h-3 text-blue-400" />
+                        <span>Supressão</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

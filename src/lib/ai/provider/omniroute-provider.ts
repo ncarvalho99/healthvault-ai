@@ -184,7 +184,7 @@ export class OmniRouteProvider {
   }
 
   /**
-   * Performs standard chat completion with tool calling
+   * Performs standard chat completion with tool calling, reasoning controls, and correlation IDs
    */
   static async chatCompletion(params: {
     baseUrl: string;
@@ -194,6 +194,9 @@ export class OmniRouteProvider {
     tools?: any[];
     toolChoice?: any;
     sessionId?: string;
+    requestId?: string;
+    correlationId?: string;
+    reasoningPolicy?: "AUTO" | "DISABLED" | "LOW" | "MEDIUM" | "HIGH";
     timeoutMs?: number;
   }) {
     const { chatUrl } = normalizeBaseUrl(params.baseUrl);
@@ -202,8 +205,12 @@ export class OmniRouteProvider {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${params.apiKey}`,
-      "X-Request-Id": crypto.randomUUID(),
+      "X-Request-Id": params.requestId || crypto.randomUUID(),
     };
+
+    if (params.correlationId) {
+      headers["X-Correlation-Id"] = params.correlationId;
+    }
 
     if (params.sessionId) {
       headers["X-Session-Id"] = params.sessionId.startsWith("healthvault:")
@@ -215,6 +222,19 @@ export class OmniRouteProvider {
       model: params.model,
       messages: params.messages,
     };
+
+    // Apply upstream reasoning controls when policy is set
+    if (params.reasoningPolicy === "DISABLED") {
+      body.reasoning_effort = "none";
+      body.thinking = { type: "disabled" };
+    } else if (params.reasoningPolicy === "LOW") {
+      body.reasoning_effort = "low";
+      body.thinking = { type: "enabled", budget_tokens: 1024 };
+    } else if (params.reasoningPolicy === "MEDIUM") {
+      body.reasoning_effort = "medium";
+    } else if (params.reasoningPolicy === "HIGH") {
+      body.reasoning_effort = "high";
+    }
 
     if (params.tools && params.tools.length > 0) {
       body.tools = params.tools;
@@ -240,5 +260,47 @@ export class OmniRouteProvider {
     }
 
     return res.json();
+  }
+
+  /**
+   * Tests whether a model supports upstream reasoning suppression
+   */
+  static async testReasoningSuppression(baseUrl: string, apiKey: string, modelId: string, timeoutMs = 25000) {
+    const start = performance.now();
+    try {
+      const completion = await this.chatCompletion({
+        baseUrl,
+        apiKey,
+        model: modelId,
+        messages: [{ role: "user", content: "Diga 'OK' e nada mais." }],
+        reasoningPolicy: "DISABLED",
+        timeoutMs,
+      });
+
+      const latencyMs = Math.round(performance.now() - start);
+      const msg = completion?.choices?.[0]?.message;
+      const rawContent = msg?.content || "";
+
+      const hasTag = /<(think|thinking|reasoning)>/i.test(rawContent);
+      const hasField = Boolean(msg?.reasoning_content || msg?.reasoning || msg?.thinking);
+
+      let status = "SUPPORTED";
+      if (hasTag || hasField) {
+        status = "PARTIAL"; // Replied but reasoning was emitted despite suppression request
+      }
+
+      return {
+        status,
+        hasTag,
+        hasField,
+        latencyMs,
+      };
+    } catch (err: any) {
+      return {
+        status: "NOT_SUPPORTED",
+        error: err.message,
+        latencyMs: Math.round(performance.now() - start),
+      };
+    }
   }
 }

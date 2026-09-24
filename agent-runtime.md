@@ -10,6 +10,7 @@ The **HealthVault Agent Tool Runtime** establishes a secure, structured runtime 
 3. **Structured Tool Calling Only**: Actions are initiated exclusively through structured, schema-validated tool calls (`tool_calls`).
 4. **Mandatory Versioning & Provenance**: Any medication dose change, diet adjustment, or recommendation update creates an immutable version linked to the originating conversation.
 5. **Human Approval Workflow**: High-risk or policy-configured actions (e.g. medication changes, dosage titration) pause and present an interactive approval card in chat.
+6. **Reasoning Suppression & Sanitization**: Raw chain-of-thought blocks (`<thinking>`, `<think>`) and internal reasoning fields are suppressed upstream and stripped server-side, ensuring only clean, user-facing markdown is persisted and displayed.
 
 ---
 
@@ -18,15 +19,22 @@ The **HealthVault Agent Tool Runtime** establishes a secure, structured runtime 
 ```text
 User Input in Chat
        ↓
-ContextBuilder (Assembles strict system prompt + delimited health records data)
+ContextBuilder (Assembles strict system prompt + delimited health records data + character budget)
        ↓
 ToolSelector (Selects scoped tool definitions based on conversation intent)
        ↓
-POST OmniRoute /v1/chat/completions (model: exploit / demigod-flash, tools: [...])
+ReasoningPolicyResolver (exploit => DISABLED; others => AUTO)
        ↓
-LLM emits structured tool_calls
+POST OmniRoute /v1/chat/completions (model: exploit / demigod-flash, tools: [...], thinking: { type: "disabled" })
        ↓
-HealthVault Tool Dispatcher
+LLM emits structured tool_calls or response text
+       ↓
+AssistantResponseProcessor
+       ├── Strips separate reasoning fields (reasoning_content, thinking, analysis)
+       ├── ReasoningFilter (Removes <think>, <thinking>, <reasoning> blocks including multiline/unclosed)
+       └── MarkdownNormalizer (Normalizes whitespace, linebreaks, and separators)
+       ↓
+HealthVault Tool Dispatcher (if tool_calls present)
        ├── 1. Idempotency Check (prevents duplicates on stream retries)
        ├── 2. Permission Engine (verifies access, risk level, enabled status)
        ├── 3. Zod Schema Validation (strictly checks types, positive values, non-empty clinical reasons)
@@ -40,7 +48,7 @@ Tool Results fed back as role=tool messages
        ↓
 LLM generates conversational explanation of action taken
        ↓
-Rendered in Browser (Interactive cards, version link, toast confirmations)
+Rendered in Browser (<MessageContent /> Markdown renderer, Interactive cards, version link, toast confirmations)
 ```
 
 ---
@@ -51,6 +59,7 @@ Rendered in Browser (Interactive cards, version link, toast confirmations)
 |---|---|---|---|---|---|
 | `healthvault_ping` | `system` | read | low | Auto | Capability handshake to test tool calling support |
 | `healthvault_get_context` | `context` | read | low | Auto | Retrieves clinical data snapshots by category |
+| `healthvault_search` | `context` | read | low | Auto | Searches historical health records across categories |
 | `healthvault_list_medications` | `medications` | read | low | Auto | Lists active medications, forms and doses |
 | `healthvault_get_medication` | `medications` | read | low | Auto | Retrieves details for a specific medication |
 | `healthvault_get_medication_history`| `medications` | read | low | Auto | Retrieves versioned dosage history |
@@ -74,7 +83,27 @@ Rendered in Browser (Interactive cards, version link, toast confirmations)
 
 ---
 
-## 4. Security & Hardening Boundaries
+## 4. Response Pipeline & Markdown Rendering
+
+1. **Reasoning Policy & Upstream Control**:
+   - `exploit` combo automatically maps to `reasoningPolicy: "DISABLED"`.
+   - Sends `reasoning_effort: "none"` and `thinking: { type: "disabled" }` to OmniRoute.
+2. **Server-Side Sanitization**:
+   - `ReasoningFilter` strips any leaked `<think>`, `<thinking>`, or `<reasoning>` blocks.
+   - Private reasoning is never saved in `Message.content`, never reinjected in future context, and never exposed in the UI.
+3. **Dedicated Markdown Renderer (`<MessageContent />`)**:
+   - Built on `react-markdown` and `remark-gfm`.
+   - Formats `**bold**`, `*italic*`, headings, tables, numbered and bulleted lists, inline code, and code blocks cleanly.
+   - Prevents XSS: does not use `dangerouslySetInnerHTML`.
+   - External links automatically open in a new tab with `target="_blank" rel="noopener noreferrer"`.
+4. **Timeline Service**:
+   - `TimelineService` aggregates database records directly without localhost self-HTTP requests.
+5. **Correlation Tracking**:
+   - Each interaction generates a root `X-Correlation-Id` (`hv_<id>`) and unique child `X-Request-Id` per tool loop iteration, preventing deduplication conflicts on gateways.
+
+---
+
+## 5. Security & Hardening Boundaries
 
 1. **Prompt Injection Boundary**:
    - Patient notes, symptom triggers, and historical records are strictly quarantined inside `<healthvault_data><records>...</records></healthvault_data>`.
@@ -86,3 +115,5 @@ Rendered in Browser (Interactive cards, version link, toast confirmations)
    - The registry intentionally provides zero tools for account deletion, purge history, drop tables, restore backups, or alter system security settings.
 4. **Idempotency Guarantee**:
    - Unique tracking via `toolCallId` ensures retried completions do not produce phantom versions.
+5. **Optimistic Concurrency & Proposal TTL**:
+   - Proposals capture entity version at time of proposal and reject stale applications with `VERSION_CONFLICT` if the record changed in the interim.

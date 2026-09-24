@@ -9,6 +9,7 @@ import { logAudit } from "@/lib/audit";
 const testCapabilitySchema = z.object({
   integrationId: z.string().uuid(),
   modelExternalId: z.string().min(1),
+  testType: z.enum(["tool_calling", "reasoning_suppression"]).optional().default("tool_calling"),
 });
 
 export async function POST(req: NextRequest) {
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Validation failed", details: result.error.format() }, { status: 400 });
     }
 
-    const { integrationId, modelExternalId } = result.data;
+    const { integrationId, modelExternalId, testType } = result.data;
 
     const integration = await db.aiIntegration.findFirst({
       where: { id: integrationId, userId: user!.userId },
@@ -33,6 +34,30 @@ export async function POST(req: NextRequest) {
     }
 
     const plainApiKey = decryptApiKey(integration.encryptedApiKey);
+
+    if (testType === "reasoning_suppression") {
+      const res = await OmniRouteProvider.testReasoningSuppression(
+        integration.baseUrl,
+        plainApiKey,
+        modelExternalId,
+        25000
+      );
+
+      await logAudit({
+        userId: user!.userId,
+        action: "AI_REASONING_SUPPRESSION_TESTED",
+        entity: "AI_MODEL",
+        metadata: { model: modelExternalId, status: res.status, latencyMs: res.latencyMs },
+      });
+
+      return NextResponse.json({
+        success: true,
+        model: modelExternalId,
+        testType: "reasoning_suppression",
+        suppressionStatus: res.status,
+        latencyMs: res.latencyMs,
+      });
+    }
 
     await logAudit({
       userId: user!.userId,

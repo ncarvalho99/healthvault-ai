@@ -8,6 +8,8 @@ import { ContextBuilder } from "@/lib/ai/context/context-builder";
 import { ToolRegistry } from "@/lib/ai/tools/registry";
 import { ToolSelector } from "@/lib/ai/tools/selector";
 import { ToolDispatcher } from "@/lib/ai/tools/dispatcher";
+import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
+import { AssistantResponseProcessor } from "@/lib/ai/response/assistant-response-processor";
 import { logAudit } from "@/lib/audit";
 import { SenderType } from "@prisma/client";
 
@@ -102,6 +104,8 @@ export async function POST(req: NextRequest) {
     }
 
     const plainApiKey = decryptApiKey(integration.encryptedApiKey);
+    const correlationId = "hv_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    const reasoningPolicy = resolveReasoningPolicy(activeModel);
 
     // 4. Dynamic Tool Scoping based on message intent and agentMode
     const scopedTools = ToolSelector.selectTools({
@@ -121,12 +125,14 @@ export async function POST(req: NextRequest) {
     // 6. Server-side Tool Loop with Infinite Loop Protection
     let iteration = 0;
     let finalAssistantText = "";
+    let finalResponseMetadata: Record<string, any> = {};
     const executedToolsList: any[] = [];
     let currentMessages = [...contextMessages];
     const callSignatures = new Set<string>();
 
     while (iteration < MAX_TOOL_ITERATIONS) {
       iteration++;
+      const requestId = `${correlationId}_${iteration}_${crypto.randomUUID().slice(0, 8)}`;
 
       const completion = await OmniRouteProvider.chatCompletion({
         baseUrl: integration.baseUrl,
@@ -136,6 +142,9 @@ export async function POST(req: NextRequest) {
         tools: openAITools.length > 0 ? openAITools : undefined,
         toolChoice: openAITools.length > 0 ? "auto" : undefined,
         sessionId: conversationId,
+        requestId,
+        correlationId,
+        reasoningPolicy,
         timeoutMs: integration.requestTimeoutMs,
       });
 
@@ -171,7 +180,7 @@ export async function POST(req: NextRequest) {
             action: "AI_TOOL_LOOP_ABORTED",
             entity: "CONVERSATION",
             entityId: conversationId,
-            metadata: { iteration, reason: "Identical tool arguments repeated in sequence" },
+            metadata: { iteration, correlationId, reason: "Identical tool arguments repeated in sequence" },
           });
           finalAssistantText = "Detectado loop de ferramentas idênticas. Ação interrompida com segurança.";
           break;
@@ -209,7 +218,10 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      finalAssistantText = assistantMsg.content || "Ação processada com sucesso.";
+      // Final response processing through AssistantResponseProcessor pipeline
+      const processed = AssistantResponseProcessor.process(assistantMsg, activeModel, reasoningPolicy);
+      finalAssistantText = processed.cleanContent || "Ação processada com sucesso.";
+      finalResponseMetadata = processed.metadata;
       break;
     }
 
@@ -217,7 +229,7 @@ export async function POST(req: NextRequest) {
       finalAssistantText += "\n\n*(Limite de passos operacionais do assistente atingido).*";
     }
 
-    // 7. Save Assistant message
+    // 7. Save Assistant message with clean sanitized content
     const assistantRecord = await db.message.create({
       data: {
         conversationId,
@@ -230,6 +242,8 @@ export async function POST(req: NextRequest) {
           executedTools: executedToolsList.map((t) => t.toolName),
           iterations: iteration,
           agentMode,
+          correlationId,
+          ...finalResponseMetadata,
         },
       },
     });
@@ -246,6 +260,8 @@ export async function POST(req: NextRequest) {
         iterations: iteration,
         toolsCalled: executedToolsList.map((t) => t.toolName),
         mode: agentMode,
+        correlationId,
+        reasoningSuppressed: finalResponseMetadata.reasoningSuppressed,
       },
     });
 
