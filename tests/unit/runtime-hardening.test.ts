@@ -4,9 +4,9 @@ import { ToolRegistry } from "../../src/lib/ai/tools/registry";
 import { SearchService } from "../../src/lib/services/search-service";
 
 describe("Agent Runtime Hardening — Tool Catalog Synchronization", () => {
-  it("should have exactly 22 clinical and context tools registered with complete metadata", () => {
+  it("should have exactly 27 clinical and context tools registered with complete metadata", () => {
     const registeredTools = ToolRegistry.getAll();
-    assert.strictEqual(registeredTools.length, 22);
+    assert.strictEqual(registeredTools.length, 27);
 
     for (const tool of registeredTools) {
       assert.ok(tool.name.startsWith("healthvault_"), `${tool.name} must start with healthvault_`);

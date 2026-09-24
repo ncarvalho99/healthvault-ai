@@ -15,6 +15,7 @@ import {
   Server,
   Terminal,
   RefreshCw,
+  Globe,
 } from "lucide-react";
 
 export default function RuntimeStatusPage() {
@@ -164,9 +165,45 @@ export default function RuntimeStatusPage() {
                         <div className="flex justify-between">
                           <span>Reasoning Policy:</span>
                           <span className={`font-mono font-bold ${m.externalId === "exploit" ? "text-rose-400" : "text-blue-400"}`}>
-                            {m.externalId === "exploit" ? "DISABLED (Filtered)" : "AUTO"}
+                            {m.externalId === "exploit" ? "DISABLED (Filtered)" : (m.reasoningPolicy || "AUTO")}
                           </span>
                         </div>
+                        <div className="flex justify-between">
+                          <span>Web Research Policy:</span>
+                          <span className={`font-mono font-bold ${m.externalId === "exploit" ? "text-emerald-400" : "text-slate-400"}`}>
+                            {m.externalId === "exploit" ? "REQUIRED (Web-First)" : (m.webResearchPolicy || "AUTO")}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Web Provider:</span>
+                          <span className="font-mono text-slate-300">
+                            {data.researchInfo?.activeProvider || "SearXNG"}
+                          </span>
+                        </div>
+                        {m.externalId === "exploit" && (
+                          <div className="pt-1.5 border-t border-slate-900 text-[10px] space-y-0.5 text-slate-400">
+                            <div className="flex justify-between">
+                              <span>Última Pesquisa:</span>
+                              <span className="font-mono text-slate-300">
+                                {data.researchInfo?.lastResearch?.timestamp
+                                  ? new Date(data.researchInfo.lastResearch.timestamp).toLocaleTimeString("pt-BR")
+                                  : "N/A"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Status Pesquisa:</span>
+                              <span className="font-mono text-emerald-400">
+                                {data.researchInfo?.lastResearch?.status || "Pronto"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Fontes Indexadas:</span>
+                              <span className="font-mono text-slate-300">
+                                {data.researchInfo?.lastResearch?.sourcesCount ?? 0}
+                              </span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -195,7 +232,16 @@ export default function RuntimeStatusPage() {
                               }),
                             });
                             const r = await res.json();
-                            alert(`Resultado Supressão (${m.externalId}): ${r.suppressionStatus} em ${r.latencyMs}ms`);
+                            if (r.report) {
+                              const variantDetails = r.report.variants
+                                .map((v: any) => `[${v.variant}] ${v.description}: ${v.requestAccepted ? (v.reasoningLeakDetected ? "Vazou <thinking>" : "Sem vazamento") : "Rejeitado"}`)
+                                .join("\n");
+                              alert(
+                                `Diagnóstico A/B Supressão (${m.externalId}):\nStatus: ${r.report.upstreamReasoningControl}\n\n${r.report.summary}\n\nVariantes Testadas:\n${variantDetails}`
+                              );
+                            } else {
+                              alert(`Resultado Supressão (${m.externalId}): ${r.suppressionStatus} em ${r.latencyMs}ms`);
+                            }
                           } catch (err: any) {
                             alert("Erro: " + err.message);
                           } finally {
@@ -207,7 +253,7 @@ export default function RuntimeStatusPage() {
                         title="Testa envio de flags de supressão de reasoning para o OmniRoute"
                       >
                         <ShieldCheck className="w-3 h-3 text-blue-400" />
-                        <span>Supressão</span>
+                        <span>Supressão A/B</span>
                       </button>
                     </div>
                   </div>

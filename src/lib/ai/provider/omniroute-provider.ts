@@ -24,6 +24,32 @@ export interface ModelItem {
   rawMetadata?: any;
 }
 
+export interface ABSuppressionProbeVariantResult {
+  variant: "A" | "B" | "C" | "D";
+  description: string;
+  payload: Record<string, any>;
+  requestAccepted: boolean;
+  httpStatus?: number;
+  reasoningLeakDetected: boolean;
+  reasoningFieldDetected: boolean;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  reasoning_tokens?: number;
+  latency_ms: number;
+  finish_reason?: string;
+  error?: string;
+}
+
+export interface ABSuppressionProbeReport {
+  modelId: string;
+  timestamp: string;
+  variants: ABSuppressionProbeVariantResult[];
+  upstreamControlEffective: boolean;
+  upstreamReasoningControl: "EFFECTIVE" | "PARTIAL" | "NOT_EFFECTIVE" | "REJECTED";
+  recommendedPolicy: string;
+  summary: string;
+}
+
 export class OmniRouteProvider {
   /**
    * Tests connection and measure latency
@@ -197,6 +223,7 @@ export class OmniRouteProvider {
     requestId?: string;
     correlationId?: string;
     reasoningPolicy?: "AUTO" | "DISABLED" | "LOW" | "MEDIUM" | "HIGH";
+    rawPayloadOverrides?: Record<string, any>;
     timeoutMs?: number;
   }) {
     const { chatUrl } = normalizeBaseUrl(params.baseUrl);
@@ -221,19 +248,22 @@ export class OmniRouteProvider {
     const body: Record<string, any> = {
       model: params.model,
       messages: params.messages,
+      ...(params.rawPayloadOverrides || {}),
     };
 
-    // Apply upstream reasoning controls when policy is set
-    if (params.reasoningPolicy === "DISABLED") {
-      body.reasoning_effort = "none";
-      body.thinking = { type: "disabled" };
-    } else if (params.reasoningPolicy === "LOW") {
-      body.reasoning_effort = "low";
-      body.thinking = { type: "enabled", budget_tokens: 1024 };
-    } else if (params.reasoningPolicy === "MEDIUM") {
-      body.reasoning_effort = "medium";
-    } else if (params.reasoningPolicy === "HIGH") {
-      body.reasoning_effort = "high";
+    // Apply upstream reasoning controls only when not overridden by explicit probe payload
+    if (!params.rawPayloadOverrides) {
+      if (params.reasoningPolicy === "DISABLED") {
+        body.reasoning_effort = "none";
+        body.thinking = { type: "disabled" };
+      } else if (params.reasoningPolicy === "LOW") {
+        body.reasoning_effort = "low";
+        body.thinking = { type: "enabled", budget_tokens: 1024 };
+      } else if (params.reasoningPolicy === "MEDIUM") {
+        body.reasoning_effort = "medium";
+      } else if (params.reasoningPolicy === "HIGH") {
+        body.reasoning_effort = "high";
+      }
     }
 
     if (params.tools && params.tools.length > 0) {
@@ -263,44 +293,159 @@ export class OmniRouteProvider {
   }
 
   /**
+   * Diagnostic A/B Reasoning Suppression Probe
+   * Evaluates if upstream parameters can suppress reasoning or if client-side sanitization is required.
+   *
+   * A: reasoning_effort = "none"
+   * B: thinking = false
+   * C: thinking = { type: "disabled" }
+   * D: Control (no reasoning parameters)
+   *
+   * Gathers telemetry without ever persisting textual reasoning.
+   */
+  static async testReasoningSuppressionAB(
+    baseUrl: string,
+    apiKey: string,
+    modelId: string,
+    timeoutMs = 25000
+  ): Promise<ABSuppressionProbeReport> {
+    const variantsConfig = [
+      {
+        variant: "A" as const,
+        description: 'reasoning_effort = "none"',
+        payload: { reasoning_effort: "none" },
+      },
+      {
+        variant: "B" as const,
+        description: "thinking = false",
+        payload: { thinking: false },
+      },
+      {
+        variant: "C" as const,
+        description: 'thinking = { type: "disabled" }',
+        payload: { thinking: { type: "disabled" } },
+      },
+      {
+        variant: "D" as const,
+        description: "Controle (sem parâmetros de reasoning)",
+        payload: {},
+      },
+    ];
+
+    const results: ABSuppressionProbeVariantResult[] = [];
+
+    for (const v of variantsConfig) {
+      const start = performance.now();
+      try {
+        const completion = await this.chatCompletion({
+          baseUrl,
+          apiKey,
+          model: modelId,
+          messages: [{ role: "user", content: "Diga 'OK' e nada mais." }],
+          rawPayloadOverrides: v.payload,
+          timeoutMs,
+        });
+
+        const latency_ms = Math.round(performance.now() - start);
+        const choice = completion?.choices?.[0];
+        const msg = choice?.message;
+        const rawContent = msg?.content || "";
+
+        const reasoningLeakDetected = /<(think|thinking|reasoning)>/i.test(rawContent);
+        const reasoningFieldDetected = Boolean(
+          msg?.reasoning_content || msg?.reasoning || msg?.thinking || msg?.analysis
+        );
+
+        const usage = completion?.usage;
+        const prompt_tokens = typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
+        const completion_tokens = typeof usage?.completion_tokens === "number" ? usage.completion_tokens : undefined;
+        const reasoning_tokens =
+          typeof usage?.completion_tokens_details?.reasoning_tokens === "number"
+            ? usage.completion_tokens_details.reasoning_tokens
+            : typeof usage?.reasoning_tokens === "number"
+            ? usage.reasoning_tokens
+            : undefined;
+
+        results.push({
+          variant: v.variant,
+          description: v.description,
+          payload: v.payload,
+          requestAccepted: true,
+          httpStatus: 200,
+          reasoningLeakDetected,
+          reasoningFieldDetected,
+          prompt_tokens,
+          completion_tokens,
+          reasoning_tokens,
+          latency_ms,
+          finish_reason: choice?.finish_reason,
+        });
+      } catch (err: any) {
+        const latency_ms = Math.round(performance.now() - start);
+        results.push({
+          variant: v.variant,
+          description: v.description,
+          payload: v.payload,
+          requestAccepted: false,
+          reasoningLeakDetected: false,
+          reasoningFieldDetected: false,
+          latency_ms,
+          error: err.message || "Request failed",
+        });
+      }
+    }
+
+    // Determine upstream effectiveness across suppression variants (A, B, C)
+    const suppressionVariants = results.filter((r) => r.variant !== "D");
+    const anyAccepted = suppressionVariants.some((r) => r.requestAccepted);
+    const anyEffective = suppressionVariants.some(
+      (r) => r.requestAccepted && !r.reasoningLeakDetected && !r.reasoningFieldDetected
+    );
+
+    let upstreamReasoningControl: "EFFECTIVE" | "PARTIAL" | "NOT_EFFECTIVE" | "REJECTED" = "NOT_EFFECTIVE";
+    let summary = "";
+
+    if (!anyAccepted) {
+      upstreamReasoningControl = "REJECTED";
+      summary = "O gateway upstream rejeitou os parâmetros de supressão de raciocínio.";
+    } else if (anyEffective) {
+      upstreamReasoningControl = "EFFECTIVE";
+      summary = "Ao menos uma estratégia upstream suprimiu com sucesso os blocos de raciocínio.";
+    } else {
+      upstreamReasoningControl = "NOT_EFFECTIVE";
+      summary =
+        "O combo aceitou as chamadas, mas persistiu vazando raciocínio (<thinking> ou reasoning fields). Upstream control is NOT_EFFECTIVE; sanitização client-side no HealthVault é indispensável.";
+    }
+
+    return {
+      modelId,
+      timestamp: new Date().toISOString(),
+      variants: results,
+      upstreamControlEffective: anyEffective,
+      upstreamReasoningControl,
+      recommendedPolicy: anyEffective ? "UPSTREAM_SUPPORTED" : "HEALTHVAULT_FILTER_MANDATORY",
+      summary,
+    };
+  }
+
+  /**
    * Tests whether a model supports upstream reasoning suppression
    */
   static async testReasoningSuppression(baseUrl: string, apiKey: string, modelId: string, timeoutMs = 25000) {
-    const start = performance.now();
-    try {
-      const completion = await this.chatCompletion({
-        baseUrl,
-        apiKey,
-        model: modelId,
-        messages: [{ role: "user", content: "Diga 'OK' e nada mais." }],
-        reasoningPolicy: "DISABLED",
-        timeoutMs,
-      });
+    const report = await this.testReasoningSuppressionAB(baseUrl, apiKey, modelId, timeoutMs);
+    const anyLeak = report.variants.some((v) => v.reasoningLeakDetected || v.reasoningFieldDetected);
+    const anyField = report.variants.some((v) => v.reasoningFieldDetected);
 
-      const latencyMs = Math.round(performance.now() - start);
-      const msg = completion?.choices?.[0]?.message;
-      const rawContent = msg?.content || "";
-
-      const hasTag = /<(think|thinking|reasoning)>/i.test(rawContent);
-      const hasField = Boolean(msg?.reasoning_content || msg?.reasoning || msg?.thinking);
-
-      let status = "SUPPORTED";
-      if (hasTag || hasField) {
-        status = "PARTIAL"; // Replied but reasoning was emitted despite suppression request
-      }
-
-      return {
-        status,
-        hasTag,
-        hasField,
-        latencyMs,
-      };
-    } catch (err: any) {
-      return {
-        status: "NOT_SUPPORTED",
-        error: err.message,
-        latencyMs: Math.round(performance.now() - start),
-      };
-    }
+    return {
+      status: report.upstreamControlEffective
+        ? "SUPPORTED"
+        : report.upstreamReasoningControl === "REJECTED"
+        ? "NOT_SUPPORTED"
+        : "NOT_EFFECTIVE",
+      hasTag: anyLeak,
+      hasField: anyField,
+      latencyMs: report.variants[0]?.latency_ms || 0,
+      report,
+    };
   }
 }

@@ -7,7 +7,7 @@
 ## 🌟 Key Features
 
 1. **Dual-Layer Conversation Model**:
-   - **Full History Layer**: WhatsApp/Messenger-style interface with user and AI speech bubbles, markdown support, and message edit tracking.
+   - **Full History Layer**: WhatsApp/Messenger-style interface with user and AI speech bubbles, markdown support, message edit tracking, and collapsible **Web Research Source Citations**.
    - **Living Snapshot Layer**: Pinned "Latest Recommendation" panel displaying active medications, current nutritional targets, and next review dates.
 2. **Immutable Versioning**:
    - Dosages, frequencies, and macronutrient targets are never silently overwritten.
@@ -17,10 +17,19 @@
    - Explicit badges separating `AI Suggestion` from `Doctor Recommendation` and `User Note`.
    - Distinct amber warning banners on unconfirmed AI outputs (`⚠️ AI-generated suggestion — not medical prescription`).
 4. **AI Agent & OmniRoute Integration**:
-   - Seamless connection to OmniRoute (e.g. `https://omniroute.example.com/v1`) with model/combo discovery (e.g. `demigod-flash`).
-   - Server-side Tool Dispatcher supporting 12+ structured actions (updating medications, adjusting diet macros, recording symptoms and metrics).
+   - Seamless connection to OmniRoute (e.g. `https://omniroute.example.com/v1`) with model/combo discovery (e.g. `exploit`, `demigod-flash`).
+   - Server-side Tool Dispatcher supporting 27 structured clinical actions.
    - Configurable AI Write Policies (`Auto Apply` vs `Review First`) with interactive in-chat approval proposals.
-   - AES-256-GCM encrypted API key storage with zero frontend exposition.
+   - AES-256-GCM encrypted API key storage with PBKDF2/SHA-256 key derivation.
+5. **Web-First Exploit Mode & Medical Source Ranking**:
+   - Server-side mandatory preflight web research for the `exploit` combo on all external/factual clinical queries.
+   - Self-hosted SearXNG integration (homelab LXC 131) and Brave Search API support.
+   - Multi-tier clinical ranking prioritizing Tier 1 sources (FDA, EMA, ANVISA, PubMed, ClinicalTrials.gov) and penalizing anecdotal forum claims.
+   - Fail-closed safety: refuses to fall back to stale model memory when live external evidence is unavailable.
+6. **Hardened Response Pipeline & Reasoning Sanitization**:
+   - Dual-stage suppression: client-side filtering of `<think>`/`<thinking>` tags and intermediate tool-loop reasoning sanitization.
+   - Root completion token telemetry tracking `prompt_tokens`, `completion_tokens`, and `reasoning_tokens`.
+   - Diagnostic A/B reasoning suppression probe. zero frontend exposition.
 5. **Comprehensive Health Records**:
    - Medication tracker with titration timelines.
    - Nutrition and meal planning with caloric and macronutrient targets.
@@ -104,6 +113,9 @@ pnpm test
 
 Detailed engineering specifications are available in the repository:
 - [System Architecture](architecture.md)
+- [Web-First Research Architecture](web-research.md)
+- [Agent Runtime & Tool Host](agent-runtime.md)
+- [AI & OmniRoute Integration](ai-integration.md)
 - [Security Threat Model](security.md)
 - [Deployment Guide](deployment.md)
 - [Backup & Disaster Recovery](backup-restore.md)

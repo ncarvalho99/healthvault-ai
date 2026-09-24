@@ -78,4 +78,16 @@ HealthVault AI manages sensitive personal health information (PHI), clinical rec
 - Sensitive fields (passwords, tokens, cookies, full medical notes) are explicitly excluded from logs.
 
 ### 10. Server-Side Request Forgery (SSRF)
-- The application makes no outbound HTTP requests based on user-supplied URLs.
+- The application never fetches arbitrary, user-supplied URLs directly.
+- Web research providers (SearXNG/Brave) have strict protocol constraints (`http:`, `https:` only), block CRLF injection, and strictly forbid link-local and cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`, `100.100.100.200`).
+- Self-hosted SearXNG endpoints are configured strictly by operator environment variables (`SEARXNG_BASE_URL`), never from user query input.
+
+### 11. Indirect Prompt Injection & Untrusted Data Boundary
+- All content retrieved from the web is treated strictly as **UNTRUSTED reference data**.
+- Titles and snippets are sanitized to strip HTML scripts, iframes, styles, and prompt injection tokens (`<|im_start|>`, `<|system|>`, `[INST]`, `<think>`).
+- The `<web_research>` prompt block includes explicit non-negotiable security directives instructing the LLM never to follow instructions embedded within external sources.
+- Character bounds (default 6,000 chars) prevent context exhaustion attacks.
+
+### 12. Reasoning Sanitization & Zero-Leak Storage
+- Raw model reasoning (including `<think>`, `<thinking>`, and separate reasoning fields) is completely filtered before visible display, before saving to PostgreSQL, and before feeding back to the model during tool loop iterations.
+- Telemetry only captures numeric token counts (`prompt_tokens`, `completion_tokens`, `reasoning_tokens`) from the root completion usage; textual reasoning is never stored in DB or audit logs.

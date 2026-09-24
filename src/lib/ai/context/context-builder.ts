@@ -6,6 +6,7 @@ export interface ContextBuilderOptions {
   conversationId: string;
   maxRecentMessages?: number;
   agentMode?: "AGENT" | "CHAT_ONLY" | "MANUAL";
+  researchContextBlock?: string;
 }
 
 export class ContextBuilder {
@@ -113,7 +114,10 @@ ${conversation?.summary ? `- Conversation Summary: ${conversation.summary}` : ""
     recentMessages.reverse();
 
     // 5. Budget calculation & graceful trimming of older messages
-    const systemPromptText = `${this.getSystemPrompt(agentMode)}\n\n${healthContextText.trim()}`;
+    let systemPromptText = `${this.getSystemPrompt(agentMode)}\n\n${healthContextText.trim()}`;
+    if (options.researchContextBlock && options.researchContextBlock.trim().length > 0) {
+      systemPromptText += `\n\n${options.researchContextBlock.trim()}`;
+    }
     let currentTotalChars = systemPromptText.length;
 
     const trimmedMessages: typeof recentMessages = [];

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { ToolRegistry } from "@/lib/ai/tools/registry";
+import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
+import { resolveResearchPolicy as resolveWebResearchPolicy } from "@/lib/ai/research/research-policy";
 
 export async function GET(req: NextRequest) {
   const { user, errorResponse } = await authenticateRequest(req);
@@ -37,7 +39,33 @@ export async function GET(req: NextRequest) {
     requiresApproval: t.requiresApproval,
   }));
 
-  // 4. Integrations & Models status
+  // 4. Latest research audit log
+  const latestResearchAudit = await db.auditLog.findFirst({
+    where: { userId, action: "AI_WEB_RESEARCH_EXECUTED" },
+    orderBy: { timestamp: "desc" },
+    select: {
+      timestamp: true,
+      metadata: true,
+    },
+  });
+
+  const activeProvider = (process.env.WEB_RESEARCH_PROVIDER || "searxng").trim().toLowerCase();
+  const researchInfo = {
+    activeProvider: activeProvider === "searxng" ? "SearXNG" : (activeProvider === "brave" ? "Brave Search" : "Not configured"),
+    searxngUrl: process.env.SEARXNG_BASE_URL || "http://172.26.128.61:8888",
+    hasBraveKey: Boolean(process.env.BRAVE_SEARCH_API_KEY),
+    lastResearch: latestResearchAudit
+      ? {
+          timestamp: latestResearchAudit.timestamp,
+          status: (latestResearchAudit.metadata as any)?.status || "UNKNOWN",
+          sourcesCount: (latestResearchAudit.metadata as any)?.sourcesCount || 0,
+          model: (latestResearchAudit.metadata as any)?.model,
+          provider: (latestResearchAudit.metadata as any)?.provider,
+        }
+      : null,
+  };
+
+  // 5. Integrations & Models status with Reasoning and Web Research Policies
   const integrations = await db.aiIntegration.findMany({
     where: { userId },
     include: {
@@ -57,6 +85,15 @@ export async function GET(req: NextRequest) {
     },
   });
 
+  const enrichedIntegrations = integrations.map((int) => ({
+    ...int,
+    models: int.models.map((m) => ({
+      ...m,
+      reasoningPolicy: resolveReasoningPolicy(m.externalId),
+      webResearchPolicy: resolveWebResearchPolicy(m.externalId),
+    })),
+  }));
+
   return NextResponse.json({
     stats: {
       totalExecutions,
@@ -68,6 +105,7 @@ export async function GET(req: NextRequest) {
     toolsCount: tools.length,
     tools,
     executions,
-    integrations,
+    integrations: enrichedIntegrations,
+    researchInfo,
   });
 }

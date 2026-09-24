@@ -117,3 +117,7 @@ Rendered in Browser (<MessageContent /> Markdown renderer, Interactive cards, ve
    - Unique tracking via `toolCallId` ensures retried completions do not produce phantom versions.
 5. **Optimistic Concurrency & Proposal TTL**:
    - Proposals capture entity version at time of proposal and reject stale applications with `VERSION_CONFLICT` if the record changed in the interim.
+6. **Tool-Loop Reasoning Sanitization**:
+   - When the assistant requests a tool call, its intermediate content is processed through `AssistantResponseProcessor.process(...)` before appending to the conversation history of the next iteration. Raw thinking tags never circulate back to the model.
+7. **Web-First Preflight & Context Ordering**:
+   - For combos requiring current external knowledge (`exploit`), `ResearchOrchestrator` runs before the tool loop begins. Context order is strictly preserved: System Rules → HealthVault Data → Web Research Sources → Conversation History → Tools.

@@ -124,12 +124,20 @@ E2E_AI_MODEL="exploit"
    - Substituição de 100% dos popups genéricos do navegador (`alert`, `confirm`) pelos componentes nativos do sistema: `<ConfirmDialog />` e `<Toast />`.
    - Ícones de lixeira padronizados em todos os cards e tabelas.
 6. **Agent Tool Runtime Completo**:
-   - 22 ferramentas estruturadas implementadas no `ToolRegistry`.
+   - 27 ferramentas estruturadas implementadas no `ToolRegistry`.
    - Tool Scoping por intenção semântica (`ToolSelector`).
    - Concorrência otimista com prevenção de aprovação obsoleta (`VERSION_CONFLICT`).
    - Expiração temporal de propostas (TTL).
    - Serviço de reversão de versões (`RevertService` / `POST /api/ai/revert`).
    - Tela administrativa de diagnóstico de runtime em `/settings/runtime`.
+7. **Web-First Exploit Mode & Hardening de Reasoning**:
+   - Modo **Web-First (REQUIRED)** server-side para o combo `exploit` com fail-closed para perguntas sobre fatos clínicos externos.
+   - Integração com metabusca local SearXNG (LXC 131 em `http://172.26.128.61:8888`) e Brave Search API.
+   - Classificação e ranking de autoridade médica (Tier 1 PubMed/FDA/ANVISA, Tier 2 Acadêmico, Tier 3 Secundário, Tier 4 Anedótico).
+   - Sanitização de reasoning em mensagens intermediárias de chamadas de ferramentas no tool loop.
+   - Telemetria de tokens de raciocínio a partir de `completion.usage` na raiz.
+   - Diagnóstico A/B de supressão de raciocínio upstream em `/settings/runtime`.
+   - Visualização de fontes consultadas e citações verificadas no chat (`ResearchSourcesCollapsible`).
 
 ---
 

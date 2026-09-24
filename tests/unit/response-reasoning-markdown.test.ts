@@ -86,6 +86,71 @@ describe("Response Pipeline — AssistantResponseProcessor", () => {
     assert.strictEqual(processed.reasoningPolicy, "DISABLED");
     assert.strictEqual(processed.reasoningLeakDetected, true);
   });
+
+  it("should accurately capture reasoning tokens and usage from root completion usage", () => {
+    const rawMsg = {
+      content: "Prescrição atualizada.",
+    };
+
+    const completionUsage = {
+      prompt_tokens: 150,
+      completion_tokens: 45,
+      total_tokens: 195,
+      completion_tokens_details: {
+        reasoning_tokens: 28,
+      },
+      prompt_tokens_details: {
+        cached_tokens: 50,
+      },
+    };
+
+    const processed = AssistantResponseProcessor.process(rawMsg, "exploit", "DISABLED", completionUsage);
+
+    assert.strictEqual(processed.reasoningTokenCount, 28);
+    assert.strictEqual(processed.usage?.prompt_tokens, 150);
+    assert.strictEqual(processed.usage?.completion_tokens, 45);
+    assert.strictEqual(processed.usage?.total_tokens, 195);
+    assert.strictEqual(processed.usage?.reasoning_tokens, 28);
+    assert.strictEqual(processed.usage?.cached_tokens, 50);
+    assert.strictEqual(processed.metadata.usage.reasoning_tokens, 28);
+  });
+
+  it("should sanitize intermediate assistant messages containing tool_calls before next loop iteration", () => {
+    const intermediateToolMsg = {
+      role: "assistant",
+      content: `<think>
+I should invoke healthvault_get_medications to check patient dose before replying.
+</think>`,
+      tool_calls: [
+        {
+          id: "call_abc123",
+          type: "function",
+          function: {
+            name: "healthvault_get_medications",
+            arguments: "{}",
+          },
+        },
+      ],
+    };
+
+    const processed = AssistantResponseProcessor.process(intermediateToolMsg, "exploit", "DISABLED");
+
+    // Clean content must NOT contain <think> tags
+    assert.strictEqual(processed.cleanContent.includes("<think>"), false);
+    assert.strictEqual(processed.cleanContent.includes("I should invoke"), false);
+    assert.strictEqual(processed.reasoningLeakDetected, true);
+    assert.strictEqual(processed.reasoningSuppressed, true);
+
+    // Simulated message appended to currentMessages for next iteration
+    const nextIterationMsg = {
+      role: "assistant",
+      content: processed.cleanContent || null,
+      tool_calls: intermediateToolMsg.tool_calls,
+    };
+
+    assert.strictEqual(nextIterationMsg.content, null); // completely stripped of leaked reasoning
+    assert.strictEqual(nextIterationMsg.tool_calls.length, 1);
+  });
 });
 
 describe("Response Pipeline — Tool Schema Zod Conversion", () => {

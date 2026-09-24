@@ -83,3 +83,23 @@ When a tool is subject to `REVIEW_FIRST`:
 - `healthvault_add_symptom`: Records symptoms with 1-10 severity scale.
 - `healthvault_add_lab_result`: Records biomarker laboratory tests and reference ranges.
 - `healthvault_create_reminder`: Schedules review dates.
+
+---
+
+## 5. Web-First Mode for `exploit` Combo
+
+HealthVault implements an automated server-side Web-First policy for the `exploit` combo. Whenever an external or clinical factual question is processed:
+1. `ResearchOrchestrator` runs a preflight query against the active research provider (SearXNG in homelab LXC 131 or Brave Search).
+2. Results are ranked by clinical authority (`SourceRanking` Tier 1 to 4) and formatted into `<web_research>`.
+3. If search fails or returns zero authoritative sources, the request fails closed with a controlled response rather than allowing the model to hallucinate or reply from stale weights.
+4. Telemetry is tracked in audit logs, and citations are rendered in collapsible UI cards.
+
+## 6. A/B Reasoning Suppression Diagnostics
+
+HealthVault provides an automated 4-way probe (`testReasoningSuppressionAB`) to test upstream reasoning behavior:
+- **Variant A**: `reasoning_effort: "none"`
+- **Variant B**: `thinking: false`
+- **Variant C**: `thinking: { type: "disabled" }`
+- **Variant D**: Control (no reasoning parameters)
+
+If upstream parameters are ignored and thinking tags continue to leak, HealthVault classifies upstream control as `NOT_EFFECTIVE` and continues applying client-side sanitization.

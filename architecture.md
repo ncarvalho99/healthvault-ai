@@ -322,3 +322,45 @@ All endpoints enforce JSON input validation, authentication guard, and audit log
 /audit
 └── System activity log (Login, Data changes, Export operations)
 ```
+
+---
+
+## 9. Web-First Research & Exploit Hardening
+
+HealthVault enforces a server-side **Web-First Policy** for the `exploit` combo and any models whose training knowledge may be outdated for external factual data:
+
+```text
+User Message
+     │
+     ▼
+ResearchPolicy Resolver ────────► REQUIRED (exploit) / AUTO (others)
+     │
+     ▼
+ResearchIntentAnalyzer
+     ├── LOCAL_VAULT_ONLY ─────► Zero external calls; uses HealthVault local tools
+     └── EXTERNAL_KNOWLEDGE ───► Dispatches Web Research Preflight
+                                       │
+                                       ▼
+                       SearXNG (Homelab LXC 131) / Brave Search
+                                       │
+                                       ▼
+                       SourceRanking (Tier 1 PubMed/FDA/ANVISA prioritised)
+                                       │
+                                       ▼
+                       ResearchContextBuilder (<web_research> sanitised)
+                                       │
+                                       ▼
+                       OmniRoute / exploit (Grounded answer formulation)
+                                       │
+                                       ▼
+                       AssistantResponseProcessor (Reasoning stripped)
+                                       │
+                                       ▼
+                       Final UI response with collapsible verified citations
+```
+
+### Key Safety Invariants:
+1. **Tool-Loop Sanitization**: Leaked `<thinking>` or `<think>` tags inside intermediate assistant messages are sanitized before re-injection into subsequent tool-loop iterations.
+2. **Telemetry Accuracy**: Usage and reasoning token metrics are captured from the root `completion.usage` payload, ensuring accurate token logging without storing textual reasoning.
+3. **Fail-Closed Guarantee**: For `exploit`, if web research fails or no reliable medical sources are found, HealthVault refuses silent fallback to the model's internal memory and returns a controlled, actionable message.
+4. **Authoritative Evidence First**: All web sources are classified into Tier 1 (regulatory & indexed literature), Tier 2 (academic centers), Tier 3 (secondary references), and Tier 4 (anecdotal/community), with anecdotal sources explicitly flagged and barred from serving as primary basis for dosing.

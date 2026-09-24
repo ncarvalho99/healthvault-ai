@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { LatestRecommendationPanel } from "../recommendations/LatestRecommendationPanel";
 import { MessageContent } from "./MessageContent";
+import { ResearchSourcesCollapsible } from "./ResearchSourcesCollapsible";
 import { Toast } from "../ui/Toast";
 
 interface MessageVersion {
@@ -425,6 +426,14 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
                 ) : (
                   <>
                     <MessageContent content={msg.content} senderType={msg.senderType} />
+
+                    {msg.metadata?.sources && Array.isArray(msg.metadata.sources) && msg.metadata.sources.length > 0 && (
+                      <ResearchSourcesCollapsible
+                        sources={msg.metadata.sources}
+                        runId={msg.metadata.researchRunId}
+                        provider={msg.metadata.researchProvider}
+                      />
+                    )}
 
                     {/* Edit trigger */}
                     <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">

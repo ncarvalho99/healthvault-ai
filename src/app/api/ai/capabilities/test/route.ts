@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     const plainApiKey = decryptApiKey(integration.encryptedApiKey);
 
     if (testType === "reasoning_suppression") {
-      const res = await OmniRouteProvider.testReasoningSuppression(
+      const report = await OmniRouteProvider.testReasoningSuppressionAB(
         integration.baseUrl,
         plainApiKey,
         modelExternalId,
@@ -47,15 +47,21 @@ export async function POST(req: NextRequest) {
         userId: user!.userId,
         action: "AI_REASONING_SUPPRESSION_TESTED",
         entity: "AI_MODEL",
-        metadata: { model: modelExternalId, status: res.status, latencyMs: res.latencyMs },
+        metadata: {
+          model: modelExternalId,
+          upstreamReasoningControl: report.upstreamReasoningControl,
+          effective: report.upstreamControlEffective,
+          recommendedPolicy: report.recommendedPolicy,
+          variantsCount: report.variants.length,
+        },
       });
 
       return NextResponse.json({
         success: true,
         model: modelExternalId,
         testType: "reasoning_suppression",
-        suppressionStatus: res.status,
-        latencyMs: res.latencyMs,
+        suppressionStatus: report.upstreamReasoningControl,
+        report,
       });
     }
 

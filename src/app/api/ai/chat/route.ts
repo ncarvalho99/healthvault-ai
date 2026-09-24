@@ -10,6 +10,8 @@ import { ToolSelector } from "@/lib/ai/tools/selector";
 import { ToolDispatcher } from "@/lib/ai/tools/dispatcher";
 import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
 import { AssistantResponseProcessor } from "@/lib/ai/response/assistant-response-processor";
+import { resolveResearchPolicy as resolveWebResearchPolicy } from "@/lib/ai/research/research-policy";
+import { ResearchOrchestrator } from "@/lib/ai/research/research-orchestrator";
 import { logAudit } from "@/lib/audit";
 import { SenderType } from "@prisma/client";
 
@@ -114,12 +116,94 @@ export async function POST(req: NextRequest) {
     });
     const openAITools = ToolRegistry.toOpenAITools(scopedTools);
 
-    // 5. Build context messages
+    // 4.5. Web-First Research Preflight (Mandatory for 'exploit', auto for others)
+    const webResearchPolicy = resolveWebResearchPolicy(activeModel);
+    const researchResult = await ResearchOrchestrator.execute({
+      userMessage: content,
+      modelId: activeModel,
+      agentMode,
+    });
+
+    if (researchResult.status !== "SKIPPED") {
+      await logAudit({
+        userId: user!.userId,
+        action: "AI_WEB_RESEARCH_EXECUTED",
+        entity: "CONVERSATION",
+        entityId: conversationId,
+        metadata: {
+          runId: researchResult.runId,
+          model: activeModel,
+          policy: webResearchPolicy,
+          provider: researchResult.provider,
+          queryHash: researchResult.queryHash,
+          sourcesCount: researchResult.sources.length,
+          latencyMs: researchResult.latencyMs,
+          status: researchResult.status,
+        },
+      });
+    }
+
+    // Fail-Closed Policy Enforcement for 'exploit' / REQUIRED:
+    // If external research was required but failed or returned no sources,
+    // do NOT fall back to the model's stale training memory.
+    if (
+      webResearchPolicy === "REQUIRED" &&
+      (researchResult.status === "NO_PROVIDER" ||
+        researchResult.status === "NO_SOURCES" ||
+        researchResult.status === "FAILED")
+    ) {
+      const failReason =
+        researchResult.status === "NO_PROVIDER"
+          ? "Nenhum provedor de busca na internet (SearXNG/Brave) está configurado no sistema."
+          : "Não foram encontradas fontes externas recentes e confiáveis para validar esta informação clínica.";
+
+      const controlledFailMessage = `Não consegui validar informações atuais na internet para responder a esta solicitação.
+
+O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e não possui autorização para formular respostas sobre fatos clínicos, medicamentos ou diretrizes baseando-se em sua memória de treinamento interna potencialmente desatualizada.
+
+**Motivo:** ${failReason}
+
+> *Ação sugerida:* Verifique a conectividade com o provedor de busca (SearXNG em \`http://172.26.128.61:8888\` ou configure uma chave Brave Search em Configurações) e tente novamente.`;
+
+      const assistantFailRecord = await db.message.create({
+        data: {
+          conversationId,
+          senderType: SenderType.AI,
+          senderName: `AI Assistant (${activeModel})`,
+          content: controlledFailMessage,
+          metadata: {
+            model: activeModel,
+            integrationId: integration.id,
+            agentMode,
+            correlationId,
+            researchFailedClosed: true,
+            researchPolicy: webResearchPolicy,
+            researchStatus: researchResult.status,
+            researchError: researchResult.errorMessage,
+          },
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: assistantFailRecord,
+        toolExecutions: [],
+        research: {
+          used: false,
+          policy: webResearchPolicy,
+          status: researchResult.status,
+          error: researchResult.errorMessage,
+        },
+      });
+    }
+
+    // 5. Build context messages (Order: System -> HealthVault Data -> Web Research -> History -> Recent)
     const contextMessages = await ContextBuilder.buildConversationMessages({
       userId: user!.userId,
       conversationId,
       maxRecentMessages: 15,
       agentMode,
+      researchContextBlock: researchResult.contextBlock,
     });
 
     // 6. Server-side Tool Loop with Infinite Loop Protection
@@ -157,9 +241,17 @@ export async function POST(req: NextRequest) {
 
       // Check for tool calls
       if (assistantMsg.tool_calls && Array.isArray(assistantMsg.tool_calls) && assistantMsg.tool_calls.length > 0) {
+        // Hardening: Sanitize reasoning from intermediate assistant message before injecting into next iteration
+        const processedToolStep = AssistantResponseProcessor.process(
+          assistantMsg,
+          activeModel,
+          reasoningPolicy,
+          completion?.usage
+        );
+
         currentMessages.push({
           role: "assistant",
-          content: assistantMsg.content || null,
+          content: processedToolStep.cleanContent || null,
           tool_calls: assistantMsg.tool_calls,
         });
 
@@ -219,7 +311,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Final response processing through AssistantResponseProcessor pipeline
-      const processed = AssistantResponseProcessor.process(assistantMsg, activeModel, reasoningPolicy);
+      const processed = AssistantResponseProcessor.process(assistantMsg, activeModel, reasoningPolicy, completion?.usage);
       finalAssistantText = processed.cleanContent || "Ação processada com sucesso.";
       finalResponseMetadata = processed.metadata;
       break;
@@ -244,6 +336,25 @@ export async function POST(req: NextRequest) {
           agentMode,
           correlationId,
           ...finalResponseMetadata,
+          ...(researchResult.status === "SUCCESS" && researchResult.sources.length > 0
+            ? {
+                researchUsed: true,
+                researchRunId: researchResult.runId,
+                researchPolicy: webResearchPolicy,
+                researchProvider: researchResult.provider,
+                researchSourcesCount: researchResult.sources.length,
+                sources: researchResult.sources.map((s) => ({
+                  id: s.id,
+                  title: s.title,
+                  url: s.url,
+                  domain: s.sourceDomain || "unknown",
+                  tier: s.tier,
+                  isAnecdotal: s.isAnecdotal,
+                  publishedAt: s.publishedAt,
+                  retrievedAt: s.retrievedAt,
+                })),
+              }
+            : {}),
         },
       },
     });
