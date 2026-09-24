@@ -1,15 +1,15 @@
 # HealthVault AI — Web-First Research Architecture & Exploit Hardening
 
 Data de Referência: **24 de Setembro de 2026**  
-Status: **Produção / Ativo**
+Status: **Produção / Ativo (Refactor v2 — OmniRoute Search Gateway + SearXNG Fallback)**
 
 ---
 
-## 1. Princípio Arquitetural Web-First
+## 1. Princípio Arquitetural Web-First (v2)
 
 Para modelos de inferência cujos dados de treinamento podem estar desatualizados ou incompletos (como o combo `exploit` hospedado no OmniRoute), o **HealthVault AI** atua como Autoridade Soberana de Execução e Segurança (Tool Host).
 
-> **Princípio Fundamental:** O modelo `exploit` nunca deve ser aceito como fonte primária para fatos externos, segurança de medicamentos, ensaios clínicos ou aprovações regulatórias. O HealthVault obtém evidências científicas e clínicas recentes da web **antes** de permitir que o modelo formule sua resposta, injetando os dados em formato compacto e estritamente delimitado como dados não-confiáveis.
+O gateway de metabusca do **OmniRoute** (`POST /v1/search` com provedor primário `firecrawl` e `ollama-search`) atua como o caminho primário de busca de alta fidelidade, com failover e agregação automática para o **SearXNG** local (Proxmox LXC 131) e **Brave Search API**.
 
 ```text
 Mensagem do Usuário
@@ -23,14 +23,23 @@ ResearchPolicy Resolver
 ResearchIntentAnalyzer
         ├── LOCAL_VAULT_ONLY: Não dispara pesquisa web (preserva dados pessoais)
         └── EXTERNAL_KNOWLEDGE / CURRENT_INFO: Dispara Web Research Preflight
+                 ├── Query Expansion (3 queries determinísticas)
+                 └── Domain-Targeted Queries (site:clinicaltrials.gov, site:fda.gov, site:pubmed...)
         ↓
-Provedor de Pesquisa (SearXNG em homelab ou Brave Search API)
+Cadeia de Provedores com Failover & Agregação (ResearchOrchestrator)
+        ├── 1. OmniRoute Search Gateway (/v1/search) -> Firecrawl, Ollama Search
+        ├── 2. SearXNG Homelab Fallback (LXC 131) -> categories: general (fallback: science)
+        └── 3. Brave Search API (se configurado)
         ↓
 Filtro & Ranking de Autoridade Médica (SourceRanking)
-        ├── Tier 1: FDA, EMA, ANVISA, PubMed, ClinicalTrials.gov
+        ├── Tier 1: FDA, EMA, ANVISA, PubMed, ClinicalTrials.gov, Lilly/Novo Trials
         ├── Tier 2: Centros Acadêmicos (Mayo, Hopkins, Harvard) e Sociedades Médicas
         ├── Tier 3: Referências Secundárias (WebMD, Drugs.com, Medscape)
         └── Tier 4: Fontes Anedóticas (Reddit, Fóruns) — penalizadas e sinalizadas
+        ↓
+Minimum Evidence Policy
+        ├── >= 1 Tier 1/2/3: Aprovado para Grounded Answer
+        └── Apenas Tier 4 em pergunta de segurança/dosagem: FAIL-CLOSED seguro (INSUFFICIENT_EVIDENCE)
         ↓
 ResearchContextBuilder (<web_research> sanitizado contra prompt injection)
         ↓
@@ -42,6 +51,16 @@ AssistantResponseProcessor (Sanitização de reasoning + Telemetria de tokens)
         ↓
 Persistência no DB (Message + metadata.sources) & Interface do Usuário (Fontes Consultadas)
 ```
+
+---
+
+## 2. Diagnóstico Seguro & Zero Exposição de Infraestrutura
+
+- **No Chat do Usuário**: A mensagem de erro em caso de fail-closed é 100% genérica e amigável ao paciente, orientando a reformulação da pergunta ou reiteração do pedido. Nenhum IP interno (`172.x.x.x`, `100.x.x.x`), porta (`8888`, `20128`), nome de container Proxmox (`LXC 131`, `LXC 133`) ou chave de API é exposto.
+- **No Painel Administrativo (`/settings/runtime`)**: Exibe diagnóstico transparente por provedor:
+  - OmniRoute `/v1/search` (Status, Latência, Provedores Ativos).
+  - SearXNG Fallback (Status, Categorias ativas).
+  - Métricas da última execução (Fontes Brutas, Fontes Válidas, Código de Motivo de Fail-Closed como `NO_RAW_RESULTS` ou `INSUFFICIENT_EVIDENCE`).
 
 ---
 

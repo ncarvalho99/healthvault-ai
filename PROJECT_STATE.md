@@ -130,14 +130,13 @@ E2E_AI_MODEL="exploit"
    - Expiração temporal de propostas (TTL).
    - Serviço de reversão de versões (`RevertService` / `POST /api/ai/revert`).
    - Tela administrativa de diagnóstico de runtime em `/settings/runtime`.
-7. **Web-First Exploit Mode & Hardening de Reasoning**:
-   - Modo **Web-First (REQUIRED)** server-side para o combo `exploit` com fail-closed para perguntas sobre fatos clínicos externos.
-   - Integração com metabusca local SearXNG (LXC 131 em `http://172.26.128.61:8888`) e Brave Search API.
-   - Classificação e ranking de autoridade médica (Tier 1 PubMed/FDA/ANVISA, Tier 2 Acadêmico, Tier 3 Secundário, Tier 4 Anedótico).
-   - Sanitização de reasoning em mensagens intermediárias de chamadas de ferramentas no tool loop.
-   - Telemetria de tokens de raciocínio a partir de `completion.usage` na raiz.
-   - Diagnóstico A/B de supressão de raciocínio upstream em `/settings/runtime`.
-   - Visualização de fontes consultadas e citações verificadas no chat (`ResearchSourcesCollapsible`).
+7. **Web-First Exploit Mode & Hardening de Reasoning (Refactor v2)**:
+   - Modo **Web-First (REQUIRED)** server-side para o combo `exploit` com fail-closed estrito e seguro (sem vazamento de infraestrutura no chat).
+   - Gateway primário de metabusca **OmniRoute Search Gateway** (`POST /v1/search`) com suporte a `firecrawl` e `ollama-search`.
+   - Fallback de alta resiliência para o **SearXNG** local (Proxmox LXC 131) com suporte a alternância dinâmica de categorias (`general` -> `science`).
+   - Expansão determinística de queries com direcionamento de autoridade médica (`site:clinicaltrials.gov`, `site:fda.gov`, `site:pubmed...`).
+   - Política de Evidência Mínima (`MinimumEvidencePolicy`) que avalia suficiência clínica antes do envio ao modelo.
+   - Painel `/settings/runtime` com telemetria por provedor (OmniRoute Search vs SearXNG Fallback) e contador de fontes brutas vs válidas.
 
 ---
 

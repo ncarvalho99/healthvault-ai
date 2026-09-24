@@ -16,6 +16,7 @@ import {
   Terminal,
   RefreshCw,
   Globe,
+  Search,
 } from "lucide-react";
 
 export default function RuntimeStatusPage() {
@@ -125,6 +126,110 @@ export default function RuntimeStatusPage() {
               <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1">
                 <span className="text-[11px] text-slate-400 block">Falhas / Erros</span>
                 <span className="text-xl font-bold font-mono text-rose-400">{data.stats.failedCount}</span>
+              </div>
+            </div>
+
+            {/* Web-First Search Gateway Diagnostics Card */}
+            <div className="p-5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                    <Search className="w-4 h-4 text-emerald-400" />
+                    Web-First Search Gateway & Retrieval Health
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Cadeia de aquisição externa de evidências científicas e médicas com failover automático e ranking de autoridade.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-800/60 font-semibold">
+                    Gateway: OmniRoute Search
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* OmniRoute Search Provider */}
+                <div className="p-3.5 rounded-lg bg-slate-950/60 border border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs font-mono text-slate-100">OmniRoute /v1/search</span>
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 text-[10px] font-mono border border-emerald-800/40">
+                      Primário
+                    </span>
+                  </div>
+                  <div className="text-[11px] space-y-1 text-slate-400">
+                    <div className="flex justify-between">
+                      <span>Status do Gateway:</span>
+                      <strong className={data.researchInfo?.providers?.omniroute?.ok ? "text-emerald-400" : "text-amber-400"}>
+                        {data.researchInfo?.providers?.omniroute?.ok ? "✓ Saudável" : "Indisponível"}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Provedores:</span>
+                      <span className="font-mono text-slate-300">Firecrawl → Ollama → Serper</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Latência:</span>
+                      <span className="font-mono text-slate-300">{data.researchInfo?.providers?.omniroute?.latencyMs ?? 0}ms</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SearXNG Local Fallback */}
+                <div className="p-3.5 rounded-lg bg-slate-950/60 border border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs font-mono text-slate-100">SearXNG Homelab</span>
+                    <span className="px-1.5 py-0.5 rounded bg-blue-950 text-blue-400 text-[10px] font-mono border border-blue-800/40">
+                      Fallback Local
+                    </span>
+                  </div>
+                  <div className="text-[11px] space-y-1 text-slate-400">
+                    <div className="flex justify-between">
+                      <span>Status Instância:</span>
+                      <strong className={data.researchInfo?.providers?.searxng?.ok ? "text-emerald-400" : "text-amber-400"}>
+                        {data.researchInfo?.providers?.searxng?.ok ? "✓ Conectado" : "Degradado"}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Categorias:</span>
+                      <span className="font-mono text-slate-300">general (fallback science)</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Latência:</span>
+                      <span className="font-mono text-slate-300">{data.researchInfo?.providers?.searxng?.latencyMs ?? 0}ms</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Last Research Execution Telemetry */}
+                <div className="p-3.5 rounded-lg bg-slate-950/60 border border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs font-mono text-slate-100">Última Pesquisa</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${data.researchInfo?.lastResearch?.status === "SUCCESS" ? "bg-emerald-950 text-emerald-400 border-emerald-800/40" : "bg-amber-950 text-amber-400 border-amber-800/40"}`}>
+                      {data.researchInfo?.lastResearch?.status || "Nenhuma"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] space-y-1 text-slate-400">
+                    <div className="flex justify-between">
+                      <span>Fontes Válidas / Brutas:</span>
+                      <strong className="text-emerald-400 font-mono">
+                        {data.researchInfo?.lastResearch?.sourcesCount ?? 0} / {data.researchInfo?.lastResearch?.rawResultCount ?? 0}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Cadeia Utilizada:</span>
+                      <span className="font-mono text-slate-300 truncate max-w-[150px]">
+                        {data.researchInfo?.lastResearch?.provider || "N/A"}
+                      </span>
+                    </div>
+                    {data.researchInfo?.lastResearch?.reasonCode && (
+                      <div className="flex justify-between">
+                        <span>Código Diagnóstico:</span>
+                        <span className="font-mono text-amber-400">{data.researchInfo.lastResearch.reasonCode}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 

@@ -122,6 +122,8 @@ export async function POST(req: NextRequest) {
       userMessage: content,
       modelId: activeModel,
       agentMode,
+      omnirouteBaseUrl: integration.baseUrl,
+      omnirouteApiKey: plainApiKey,
     });
 
     if (researchResult.status !== "SKIPPED") {
@@ -135,10 +137,13 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           policy: webResearchPolicy,
           provider: researchResult.provider,
+          providersAttempted: researchResult.providersAttempted,
           queryHash: researchResult.queryHash,
+          rawResultCount: researchResult.rawResultCount,
           sourcesCount: researchResult.sources.length,
           latencyMs: researchResult.latencyMs,
           status: researchResult.status,
+          reasonCode: researchResult.reasonCode,
         },
       });
     }
@@ -152,18 +157,11 @@ export async function POST(req: NextRequest) {
         researchResult.status === "NO_SOURCES" ||
         researchResult.status === "FAILED")
     ) {
-      const failReason =
-        researchResult.status === "NO_PROVIDER"
-          ? "Nenhum provedor de busca na internet (SearXNG/Brave) está configurado no sistema."
-          : "Não foram encontradas fontes externas recentes e confiáveis para validar esta informação clínica.";
+      const controlledFailMessage = `Não consegui obter fontes atuais e confiáveis para validar esta resposta no momento.
 
-      const controlledFailMessage = `Não consegui validar informações atuais na internet para responder a esta solicitação.
+O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige evidências científicas externas recentes para formular respostas sobre fatos clínicos, medicamentos e diretrizes, não tendo autorização para responder apenas a partir de memória interna potencialmente desatualizada.
 
-O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e não possui autorização para formular respostas sobre fatos clínicos, medicamentos ou diretrizes baseando-se em sua memória de treinamento interna potencialmente desatualizada.
-
-**Motivo:** ${failReason}
-
-> *Ação sugerida:* Verifique a conectividade com o provedor de busca (SearXNG em \`http://172.26.128.61:8888\` ou configure uma chave Brave Search em Configurações) e tente novamente.`;
+> *Dica:* Tente reformular a consulta com termos específicos ou tente novamente em alguns instantes. Se o problema persistir, verifique a saúde da integração de pesquisa em **Configurações > Runtime**.`;
 
       const assistantFailRecord = await db.message.create({
         data: {
@@ -179,6 +177,11 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e não 
             researchFailedClosed: true,
             researchPolicy: webResearchPolicy,
             researchStatus: researchResult.status,
+            reasonCode: researchResult.reasonCode,
+            rawResultCount: researchResult.rawResultCount,
+            rankedResultCount: researchResult.rankedResultCount,
+            trustedResultCount: researchResult.trustedResultCount,
+            providersAttempted: researchResult.providersAttempted,
             researchError: researchResult.errorMessage,
           },
         },
@@ -192,6 +195,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e não 
           used: false,
           policy: webResearchPolicy,
           status: researchResult.status,
+          reasonCode: researchResult.reasonCode,
           error: researchResult.errorMessage,
         },
       });

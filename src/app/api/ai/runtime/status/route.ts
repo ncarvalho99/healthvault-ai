@@ -4,6 +4,9 @@ import { db } from "@/lib/db";
 import { ToolRegistry } from "@/lib/ai/tools/registry";
 import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
 import { resolveResearchPolicy as resolveWebResearchPolicy } from "@/lib/ai/research/research-policy";
+import { OmniRouteSearchProvider } from "@/lib/ai/research/providers/omniroute-search-provider";
+import { SearXNGProvider } from "@/lib/ai/research/providers/searxng-provider";
+import { decryptApiKey } from "@/lib/ai/crypto";
 
 export async function GET(req: NextRequest) {
   const { user, errorResponse } = await authenticateRequest(req);
@@ -49,22 +52,6 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  const activeProvider = (process.env.WEB_RESEARCH_PROVIDER || "searxng").trim().toLowerCase();
-  const researchInfo = {
-    activeProvider: activeProvider === "searxng" ? "SearXNG" : (activeProvider === "brave" ? "Brave Search" : "Not configured"),
-    searxngUrl: process.env.SEARXNG_BASE_URL || "http://172.26.128.61:8888",
-    hasBraveKey: Boolean(process.env.BRAVE_SEARCH_API_KEY),
-    lastResearch: latestResearchAudit
-      ? {
-          timestamp: latestResearchAudit.timestamp,
-          status: (latestResearchAudit.metadata as any)?.status || "UNKNOWN",
-          sourcesCount: (latestResearchAudit.metadata as any)?.sourcesCount || 0,
-          model: (latestResearchAudit.metadata as any)?.model,
-          provider: (latestResearchAudit.metadata as any)?.provider,
-        }
-      : null,
-  };
-
   // 5. Integrations & Models status with Reasoning and Web Research Policies
   const integrations = await db.aiIntegration.findMany({
     where: { userId },
@@ -84,6 +71,64 @@ export async function GET(req: NextRequest) {
       },
     },
   });
+
+  // 6. Multi-provider Health Diagnostics (OmniRoute Search Gateway + SearXNG)
+  let omnirouteHealth = { ok: false, status: "DOWN", latencyMs: 0, error: "No integration" };
+  const firstIntegration = integrations[0];
+  if (firstIntegration) {
+    try {
+      const plainApiKey = decryptApiKey(firstIntegration.encryptedApiKey);
+      const omniSearch = new OmniRouteSearchProvider({
+        baseUrl: firstIntegration.baseUrl,
+        apiKey: plainApiKey,
+      });
+      const h = await omniSearch.healthCheck();
+      omnirouteHealth = {
+        ok: h.ok,
+        status: h.status || (h.ok ? "HEALTHY" : "DOWN"),
+        latencyMs: h.latencyMs || 0,
+        error: h.error || "",
+      };
+    } catch (err: any) {
+      omnirouteHealth = { ok: false, status: "DOWN", latencyMs: 0, error: err.message };
+    }
+  }
+
+  let searxngHealth = { ok: false, status: "DOWN", latencyMs: 0, error: "" };
+  try {
+    const searxng = new SearXNGProvider();
+    const sh = await searxng.healthCheck();
+    searxngHealth = {
+      ok: sh.ok,
+      status: sh.status || (sh.ok ? "HEALTHY" : "DOWN"),
+      latencyMs: sh.latencyMs || 0,
+      error: sh.error || "",
+    };
+  } catch (err: any) {
+    searxngHealth = { ok: false, status: "DOWN", latencyMs: 0, error: err.message };
+  }
+
+  const meta = (latestResearchAudit?.metadata as any) || {};
+  const researchInfo = {
+    gateway: "omniroute",
+    priority: ["firecrawl", "ollama-search", "searxng"],
+    providers: {
+      omniroute: omnirouteHealth,
+      searxng: searxngHealth,
+    },
+    lastResearch: latestResearchAudit
+      ? {
+          timestamp: latestResearchAudit.timestamp,
+          status: meta.status || "UNKNOWN",
+          reasonCode: meta.reasonCode,
+          sourcesCount: meta.sourcesCount || 0,
+          rawResultCount: meta.rawResultCount ?? meta.sourcesCount ?? 0,
+          model: meta.model,
+          provider: meta.provider,
+          providersAttempted: meta.providersAttempted || [meta.provider].filter(Boolean),
+        }
+      : null,
+  };
 
   const enrichedIntegrations = integrations.map((int) => ({
     ...int,

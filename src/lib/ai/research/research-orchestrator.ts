@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import {
+  FailClosedReasonCode,
   ResearchExecutionResult,
   ResearchPolicy,
+  ResearchStrategy,
   SearchResult,
   WebResearchProvider,
 } from "./types";
@@ -10,41 +12,70 @@ import { ResearchIntentAnalyzer } from "./research-intent";
 import { SourceRanking } from "./source-ranking";
 import { ResearchCache } from "./research-cache";
 import { ResearchContextBuilder } from "./research-context-builder";
+import { OmniRouteSearchProvider } from "./providers/omniroute-search-provider";
 import { SearXNGProvider } from "./providers/searxng-provider";
 import { BraveSearchProvider } from "./providers/brave-provider";
 
+export interface ResearchOrchestratorOptions {
+  userMessage: string;
+  modelId: string;
+  agentMode?: string;
+  policyOverride?: ResearchPolicy;
+  providerOverride?: string;
+  omnirouteBaseUrl?: string;
+  omnirouteApiKey?: string;
+  strategy?: ResearchStrategy;
+}
+
 export class ResearchOrchestrator {
   /**
-   * Instantiates the configured WebResearchProvider.
+   * Instantiates the primary and fallback search provider chain.
    */
-  static getProvider(customProviderName?: string): WebResearchProvider | null {
-    const providerType = (
-      customProviderName ||
-      process.env.WEB_RESEARCH_PROVIDER ||
-      "searxng"
-    ).trim().toLowerCase();
+  static getProviderChain(options?: {
+    providerOverride?: string;
+    omnirouteBaseUrl?: string;
+    omnirouteApiKey?: string;
+  }): WebResearchProvider[] {
+    const override = options?.providerOverride?.trim().toLowerCase();
 
-    if (providerType === "searxng") {
-      return new SearXNGProvider();
-    } else if (providerType === "brave") {
-      const apiKey = process.env.BRAVE_SEARCH_API_KEY;
-      if (!apiKey) return null;
-      return new BraveSearchProvider();
+    if (override === "searxng") {
+      return [new SearXNGProvider()];
+    }
+    if (override === "brave") {
+      const brave = new BraveSearchProvider();
+      return [brave];
+    }
+    if (override === "omniroute") {
+      return [
+        new OmniRouteSearchProvider({
+          baseUrl: options?.omnirouteBaseUrl,
+          apiKey: options?.omnirouteApiKey,
+        }),
+      ];
     }
 
-    return new SearXNGProvider();
+    // Default chain: OmniRoute Search Gateway (Firecrawl/Ollama) -> SearXNG Local Fallback -> Brave (if configured)
+    const chain: WebResearchProvider[] = [
+      new OmniRouteSearchProvider({
+        baseUrl: options?.omnirouteBaseUrl,
+        apiKey: options?.omnirouteApiKey,
+        defaultSubProvider: "firecrawl",
+        subProviderPriority: ["firecrawl", "ollama-search", "serper-search"],
+      }),
+      new SearXNGProvider(),
+    ];
+
+    if (process.env.BRAVE_SEARCH_API_KEY) {
+      chain.push(new BraveSearchProvider());
+    }
+
+    return chain;
   }
 
   /**
    * Orchestrates the complete Web-First Research pipeline.
    */
-  static async execute(params: {
-    userMessage: string;
-    modelId: string;
-    agentMode?: string;
-    policyOverride?: ResearchPolicy;
-    providerOverride?: string;
-  }): Promise<ResearchExecutionResult> {
+  static async execute(params: ResearchOrchestratorOptions): Promise<ResearchExecutionResult> {
     const runId = "res_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     const start = performance.now();
 
@@ -88,9 +119,14 @@ export class ResearchOrchestrator {
       };
     }
 
-    // 3. Resolve research provider
-    const provider = this.getProvider(params.providerOverride);
-    if (!provider) {
+    // 3. Resolve research provider chain
+    const providers = this.getProviderChain({
+      providerOverride: params.providerOverride,
+      omnirouteBaseUrl: params.omnirouteBaseUrl,
+      omnirouteApiKey: params.omnirouteApiKey,
+    });
+
+    if (providers.length === 0) {
       return {
         runId,
         query: params.userMessage,
@@ -102,54 +138,88 @@ export class ResearchOrchestrator {
         provider: "none",
         latencyMs: Math.round(performance.now() - start),
         status: "NO_PROVIDER",
-        errorMessage: "Nenhum provedor de busca na web está configurado no sistema.",
+        reasonCode: "NO_PROVIDER",
+        errorMessage: "Nenhum provedor de busca na web configurado no sistema.",
       };
     }
 
-    // 4. Determine queries to execute
-    const queries = intentAnalysis.suggestedQueries.length > 0
+    // 4. Formulate deterministic search queries (suggested + domain targeted)
+    const baseQueries = intentAnalysis.suggestedQueries.length > 0
       ? intentAnalysis.suggestedQueries
       : [params.userMessage.slice(0, 100)];
 
-    const primaryQuery = queries[0];
+    const primaryQuery = baseQueries[0];
+    const strategy: ResearchStrategy =
+      params.strategy ||
+      (process.env.WEB_RESEARCH_STRATEGY as ResearchStrategy) ||
+      (intentAnalysis.intent === "EXTERNAL_KNOWLEDGE" ? "aggregate" : "first_healthy");
 
-    // 5. Check Cache
-    const cachedSources = ResearchCache.get(primaryQuery, provider.name);
+    // 5. Check Cache for primary query
+    const cachedSources = ResearchCache.get(primaryQuery, "multi-gateway");
     if (cachedSources && cachedSources.length > 0) {
       const ranked = SourceRanking.rankAndFilter(cachedSources, 8);
-      const context = ResearchContextBuilder.buildContext(ranked, runId);
-      return {
-        runId,
-        query: primaryQuery,
-        queryHash,
-        policy,
-        intent: intentAnalysis.intent,
-        sources: ranked,
-        cached: true,
-        provider: provider.name,
-        latencyMs: Math.round(performance.now() - start),
-        status: "SUCCESS",
-        contextBlock: context.xmlBlock,
-      };
-    }
+      const evidenceEval = SourceRanking.evaluateMinimumEvidence(ranked, intentAnalysis.isClinicalSafetyQuery);
 
-    // 6. Execute Provider Search across queries
-    const accumulatedRawResults: SearchResult[] = [];
-    let providerError: string | undefined;
-
-    for (const q of queries) {
-      try {
-        const results = await provider.search(q, { maxResults: 8, timeoutMs: 8000 });
-        accumulatedRawResults.push(...results);
-      } catch (err: any) {
-        providerError = err.message;
+      if (evidenceEval.eligible) {
+        const context = ResearchContextBuilder.buildContext(ranked, runId);
+        return {
+          runId,
+          query: primaryQuery,
+          queryHash,
+          policy,
+          intent: intentAnalysis.intent,
+          sources: ranked,
+          cached: true,
+          provider: "cache",
+          latencyMs: Math.round(performance.now() - start),
+          status: "SUCCESS",
+          rawResultCount: cachedSources.length,
+          normalizedResultCount: cachedSources.length,
+          rankedResultCount: ranked.length,
+          trustedResultCount: evidenceEval.trustedCount,
+          contextBlock: context.xmlBlock,
+        };
       }
     }
 
-    // 7. Filter, Rank by Clinical Authority, and Deduplicate
-    const rankedSources = SourceRanking.rankAndFilter(accumulatedRawResults, 8);
+    // 6. Execute Provider Chain with Failover and Aggregation
+    const accumulatedRawResults: SearchResult[] = [];
+    const providersAttempted: string[] = [];
+    let lastErrorDetail: string | undefined;
 
-    if (rankedSources.length === 0) {
+    // Queries to execute: base queries plus first domain-targeted query if available
+    const queriesToRun = [...baseQueries];
+    if (intentAnalysis.domainTargetedQueries && intentAnalysis.domainTargetedQueries.length > 0) {
+      queriesToRun.push(intentAnalysis.domainTargetedQueries[0]);
+    }
+
+    for (const provider of providers) {
+      providersAttempted.push(provider.name);
+      let providerProducedResults = false;
+
+      for (const q of queriesToRun.slice(0, 3)) {
+        try {
+          const results = await provider.search(q, { maxResults: 8, timeoutMs: 12000 });
+          if (Array.isArray(results) && results.length > 0) {
+            accumulatedRawResults.push(...results);
+            providerProducedResults = true;
+          }
+        } catch (err: any) {
+          lastErrorDetail = err.message;
+        }
+      }
+
+      // If strategy is first_healthy and this provider produced results, stop failover
+      if (strategy === "first_healthy" && providerProducedResults) {
+        break;
+      }
+    }
+
+    const rawResultCount = accumulatedRawResults.length;
+
+    // 7. Check if raw results were gathered
+    if (rawResultCount === 0) {
+      const reasonCode: FailClosedReasonCode = providersAttempted.length > 0 ? "NO_RAW_RESULTS" : "ALL_PROVIDERS_FAILED";
       return {
         runId,
         query: primaryQuery,
@@ -158,17 +228,52 @@ export class ResearchOrchestrator {
         intent: intentAnalysis.intent,
         sources: [],
         cached: false,
-        provider: provider.name,
+        provider: providersAttempted.join("+"),
+        providersAttempted,
         latencyMs: Math.round(performance.now() - start),
         status: "NO_SOURCES",
-        errorMessage: providerError || "Nenhuma fonte relevante encontrada.",
+        reasonCode,
+        rawResultCount: 0,
+        normalizedResultCount: 0,
+        rankedResultCount: 0,
+        trustedResultCount: 0,
+        errorMessage: lastErrorDetail || "Nenhum resultado retornado pelos provedores de busca.",
       };
     }
 
-    // 8. Cache successful search
-    ResearchCache.set(primaryQuery, provider.name, rankedSources);
+    // 8. Rank and Apply Clinical Authority Scoring
+    const rankedSources = SourceRanking.rankAndFilter(accumulatedRawResults, 8);
+    const rankedResultCount = rankedSources.length;
 
-    // 9. Build XML Context Block
+    // 9. Evaluate Minimum Evidence Policy
+    const evidenceEval = SourceRanking.evaluateMinimumEvidence(rankedSources, intentAnalysis.isClinicalSafetyQuery);
+
+    if (!evidenceEval.eligible) {
+      return {
+        runId,
+        query: primaryQuery,
+        queryHash,
+        policy,
+        intent: intentAnalysis.intent,
+        sources: rankedSources,
+        cached: false,
+        provider: providersAttempted.join("+"),
+        providersAttempted,
+        latencyMs: Math.round(performance.now() - start),
+        status: "NO_SOURCES",
+        reasonCode: evidenceEval.reasonCode || "INSUFFICIENT_EVIDENCE",
+        rawResultCount,
+        normalizedResultCount: accumulatedRawResults.length,
+        rankedResultCount,
+        trustedResultCount: evidenceEval.trustedCount,
+        errorMessage: evidenceEval.evidenceCaveat || "Fontes obtidas não atingem o limiar de evidência clínica exigido.",
+      };
+    }
+
+    // 10. Cache successful search
+    ResearchCache.set(primaryQuery, "multi-gateway", rankedSources);
+
+    // 11. Build XML Context Block
     const context = ResearchContextBuilder.buildContext(rankedSources, runId);
 
     return {
@@ -179,9 +284,14 @@ export class ResearchOrchestrator {
       intent: intentAnalysis.intent,
       sources: rankedSources,
       cached: false,
-      provider: provider.name,
+      provider: providersAttempted.join("+"),
+      providersAttempted,
       latencyMs: Math.round(performance.now() - start),
       status: "SUCCESS",
+      rawResultCount,
+      normalizedResultCount: accumulatedRawResults.length,
+      rankedResultCount,
+      trustedResultCount: evidenceEval.trustedCount,
       contextBlock: context.xmlBlock,
     };
   }

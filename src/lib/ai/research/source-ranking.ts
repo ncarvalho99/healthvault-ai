@@ -1,4 +1,4 @@
-import { SearchResult } from "./types";
+import { SearchResult, FailClosedReasonCode } from "./types";
 
 const TIER_1_DOMAINS = [
   "fda.gov",
@@ -16,6 +16,8 @@ const TIER_1_DOMAINS = [
   "thelancet.com",
   "jamanetwork.com",
   "bmj.com",
+  "trials.lilly.com",
+  "trials.novonordisk.com",
 ];
 
 const TIER_2_DOMAINS = [
@@ -32,6 +34,11 @@ const TIER_2_DOMAINS = [
   "sciencedirect.com",
   "frontiersin.org",
   "biomedcentral.com",
+  "lilly.com",
+  "novonordisk.com",
+  "clinicaltrialsarena.com",
+  "medrxiv.org",
+  "biorxiv.org",
 ];
 
 const TIER_3_DOMAINS = [
@@ -44,6 +51,8 @@ const TIER_3_DOMAINS = [
   "verywellhealth.com",
   "medicalnewstoday.com",
   "statpearls.com",
+  "goodrx.com",
+  "pharmacytimes.com",
 ];
 
 const ANECDOTAL_DOMAINS = [
@@ -63,6 +72,14 @@ const ANECDOTAL_DOMAINS = [
   "wordpress.com",
   "blogspot.com",
 ];
+
+export interface MinimumEvidenceEvaluation {
+  eligible: boolean;
+  trustedCount: number;
+  highestTier: 1 | 2 | 3 | 4;
+  reasonCode?: FailClosedReasonCode;
+  evidenceCaveat?: string;
+}
 
 export class SourceRanking {
   /**
@@ -85,7 +102,17 @@ export class SourceRanking {
       const parsed = new URL(rawUrl);
       parsed.hash = "";
       const searchParams = new URLSearchParams(parsed.search);
-      const trackingKeys = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref", "fbclid", "gclid"];
+      const trackingKeys = [
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "ref",
+        "fbclid",
+        "gclid",
+        "srsltid",
+      ];
       for (const k of trackingKeys) {
         searchParams.delete(k);
       }
@@ -130,12 +157,12 @@ export class SourceRanking {
       }
     }
 
-    // Default general web domain
+    // Default general web domain (treat as Tier 3 secondary reference)
     return { tier: 3, isAnecdotal: false };
   }
 
   /**
-   * Deduplicates, ranks, and filters raw search results by clinical authority.
+   * Deduplicates and ranks search results by clinical authority without aggressive discarding.
    */
   static rankAndFilter(rawResults: SearchResult[], maxResults = 8): SearchResult[] {
     const seenUrls = new Set<string>();
@@ -154,19 +181,20 @@ export class SourceRanking {
       // Tier 1: 1000 base
       // Tier 2: 700 base
       // Tier 3: 400 base
-      // Tier 4 (anecdotal): 50 base (penalized heavily)
+      // Tier 4 (anecdotal): 50 base
       let baseScore = 400;
       if (tier === 1) baseScore = 1000;
       else if (tier === 2) baseScore = 700;
       else if (tier === 4 || isAnecdotal) baseScore = 50;
 
-      // Bonus for recent dates or clinical trial identifiers
+      // Clinical relevance bonuses
       let bonus = 0;
       const textToSearch = `${r.title} ${r.snippet || ""}`.toLowerCase();
-      if (/clinicaltrials\.gov|nct\d{8}/i.test(textToSearch)) bonus += 150;
-      if (/phase\s+(1|2|3|i|ii|iii)|randomized|double-blind|placebo/i.test(textToSearch)) bonus += 100;
-      if (/guideline|fda approval|anvisa|prescribing information/i.test(textToSearch)) bonus += 100;
-      if (/202[56]/i.test(textToSearch)) bonus += 50;
+      if (/clinicaltrials\.gov|nct\d{8}/i.test(textToSearch)) bonus += 200;
+      if (/phase\s+(1|2|3|i|ii|iii)|randomized|double-blind|placebo/i.test(textToSearch)) bonus += 150;
+      if (/fda approval|anvisa|ema|prescribing information|package insert/i.test(textToSearch)) bonus += 120;
+      if (/peer-reviewed|journal|lancet|nejm|jama/i.test(textToSearch)) bonus += 100;
+      if (/202[456]/i.test(textToSearch)) bonus += 50;
 
       const totalScore = baseScore + bonus;
 
@@ -183,13 +211,88 @@ export class SourceRanking {
       });
     }
 
-    // Sort descending by score
+    // Sort descending by authority score
     scored.sort((a, b) => b.score - a.score);
 
-    // Take top maxResults and re-assign stable IDs S1, S2...
+    // Re-index stable IDs S1, S2...
     return scored.slice(0, maxResults).map((item, idx) => ({
       ...item.result,
       id: `S${idx + 1}`,
     }));
+  }
+
+  /**
+   * Minimum Evidence Policy:
+   * Evaluates if ranked sources satisfy the clinical evidence threshold.
+   */
+  static evaluateMinimumEvidence(
+    sources: SearchResult[],
+    isClinicalSafetyQuery = false
+  ): MinimumEvidenceEvaluation {
+    if (!sources || sources.length === 0) {
+      return {
+        eligible: false,
+        trustedCount: 0,
+        highestTier: 4,
+        reasonCode: "NO_NORMALIZED_RESULTS",
+      };
+    }
+
+    const tier1Count = sources.filter((s) => s.tier === 1).length;
+    const tier2Count = sources.filter((s) => s.tier === 2).length;
+    const tier3Count = sources.filter((s) => s.tier === 3).length;
+    const tier4Count = sources.filter((s) => s.tier === 4 || s.isAnecdotal).length;
+    const trustedCount = tier1Count + tier2Count + tier3Count;
+
+    // Highest tier present
+    let highestTier: 1 | 2 | 3 | 4 = 4;
+    if (tier1Count > 0) highestTier = 1;
+    else if (tier2Count > 0) highestTier = 2;
+    else if (tier3Count > 0) highestTier = 3;
+
+    // Rule: If question is about clinical dosing/safety and only anecdotal Tier 4 sources exist:
+    if (isClinicalSafetyQuery && trustedCount === 0 && tier4Count > 0) {
+      return {
+        eligible: false,
+        trustedCount: 0,
+        highestTier: 4,
+        reasonCode: "INSUFFICIENT_EVIDENCE",
+        evidenceCaveat: "Apenas fontes anedóticas (fóruns/redes) foram encontradas para uma consulta de segurança/dosagem clínica.",
+      };
+    }
+
+    // Rule: At least 1 Tier 1 or Tier 2 or Tier 3
+    if (trustedCount > 0) {
+      let caveat: string | undefined;
+      if (tier1Count === 0 && tier2Count > 0) {
+        caveat = "Evidência baseada em centros acadêmicos e estudos secundários (Tier 2).";
+      } else if (tier1Count === 0 && tier2Count === 0 && tier3Count > 0) {
+        caveat = "Evidência informativa de referências secundárias de saúde (Tier 3).";
+      }
+
+      return {
+        eligible: true,
+        trustedCount,
+        highestTier,
+        evidenceCaveat: caveat,
+      };
+    }
+
+    // If only Tier 4 exists for general factual query (non-safety)
+    if (tier4Count > 0 && !isClinicalSafetyQuery) {
+      return {
+        eligible: true,
+        trustedCount: 0,
+        highestTier: 4,
+        evidenceCaveat: "Aviso: Fontes consultadas são comunitárias/anedóticas.",
+      };
+    }
+
+    return {
+      eligible: false,
+      trustedCount: 0,
+      highestTier: 4,
+      reasonCode: "NO_TRUSTED_RESULTS",
+    };
   }
 }

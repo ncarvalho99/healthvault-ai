@@ -4,11 +4,22 @@
 
 export type ResearchPolicy = "AUTO" | "REQUIRED" | "OFF";
 
+export type ResearchStrategy = "first_healthy" | "aggregate";
+
 export type ResearchIntentType =
   | "LOCAL_VAULT_ONLY"
   | "EXTERNAL_KNOWLEDGE"
   | "CURRENT_INFORMATION"
   | "AMBIGUOUS";
+
+export type FailClosedReasonCode =
+  | "NO_PROVIDER"
+  | "PROVIDER_TIMEOUT"
+  | "NO_RAW_RESULTS"
+  | "NO_NORMALIZED_RESULTS"
+  | "NO_TRUSTED_RESULTS"
+  | "INSUFFICIENT_EVIDENCE"
+  | "ALL_PROVIDERS_FAILED";
 
 export interface SearchResult {
   id: string; // e.g. "S1", "S2"
@@ -21,6 +32,8 @@ export interface SearchResult {
   tier: 1 | 2 | 3 | 4; // 1 = regulatory/pubmed, 2 = academic/societies, 3 = secondary, 4 = anecdotal
   isAnecdotal: boolean;
   retrievedAt: string;
+  rawScore?: number;
+  searchProvider?: string;
 }
 
 export interface ProviderHealth {
@@ -28,12 +41,15 @@ export interface ProviderHealth {
   provider: string;
   latencyMs?: number;
   error?: string;
+  availableSubProviders?: string[];
+  status?: "HEALTHY" | "DEGRADED" | "DOWN";
 }
 
 export interface SearchOptions {
   maxResults?: number;
   timeoutMs?: number;
   categories?: string[];
+  subProvider?: string;
 }
 
 export interface WebResearchProvider {
@@ -46,8 +62,10 @@ export interface ResearchIntentAnalysis {
   intent: ResearchIntentType;
   requiresExternalResearch: boolean;
   suggestedQueries: string[];
+  domainTargetedQueries?: string[];
   entities: string[];
   reason: string;
+  isClinicalSafetyQuery?: boolean;
 }
 
 export interface ResearchContext {
@@ -68,6 +86,12 @@ export interface ResearchExecutionResult {
   provider: string;
   latencyMs: number;
   status: "SUCCESS" | "SKIPPED" | "NO_PROVIDER" | "NO_SOURCES" | "FAILED";
+  reasonCode?: FailClosedReasonCode;
+  rawResultCount?: number;
+  normalizedResultCount?: number;
+  rankedResultCount?: number;
+  trustedResultCount?: number;
+  providersAttempted?: string[];
   contextBlock?: string;
   errorMessage?: string;
 }
@@ -77,7 +101,10 @@ export interface ResearchMetadata {
   researchRunId?: string;
   researchPolicy: ResearchPolicy;
   researchStatus: string;
+  reasonCode?: FailClosedReasonCode;
   provider?: string;
+  providersAttempted?: string[];
+  rawResultCount?: number;
   sourcesCount: number;
   sources?: Array<{
     id: string;
