@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { resolveResearchPolicy } from "../../src/lib/ai/research/research-policy";
+import { resolveResearchProviderPriority } from "../../src/lib/ai/research/provider-priority";
 import { ResearchIntentAnalyzer } from "../../src/lib/ai/research/research-intent";
 import { SourceRanking } from "../../src/lib/ai/research/source-ranking";
 import { ResearchContextBuilder } from "../../src/lib/ai/research/research-context-builder";
@@ -22,6 +23,56 @@ describe("Web-First Research — ResearchPolicy", () => {
   it("should respect explicit policy override when provided", () => {
     assert.strictEqual(resolveResearchPolicy("exploit", "OFF"), "OFF");
     assert.strictEqual(resolveResearchPolicy("demigod-flash", "REQUIRED"), "REQUIRED");
+  });
+});
+
+describe("Web-First Research — Provider Priority Resolution", () => {
+  it("env ausente -> firecrawl, ollama-search, searxng (default seguro)", () => {
+    const orig = process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+    delete process.env.WEB_RESEARCH_PROVIDER_PRIORITY;
+
+    try {
+      const priority = resolveResearchProviderPriority();
+      assert.deepStrictEqual(priority.fullPriority, ["firecrawl", "ollama-search", "searxng"]);
+      assert.deepStrictEqual(priority.omnirouteSubProviders, ["firecrawl", "ollama-search"]);
+      assert.deepStrictEqual(priority.directFallbacks, ["searxng"]);
+      assert.strictEqual(priority.primaryProvider, "firecrawl");
+    } finally {
+      if (orig !== undefined) process.env.WEB_RESEARCH_PROVIDER_PRIORITY = orig;
+    }
+  });
+
+  it("env = ollama-search,firecrawl,searxng -> ordem real alterada", () => {
+    const priority = resolveResearchProviderPriority("ollama-search,firecrawl,searxng");
+    assert.deepStrictEqual(priority.fullPriority, ["ollama-search", "firecrawl", "searxng"]);
+    assert.deepStrictEqual(priority.omnirouteSubProviders, ["ollama-search", "firecrawl"]);
+    assert.deepStrictEqual(priority.directFallbacks, ["searxng"]);
+    assert.strictEqual(priority.primaryProvider, "ollama-search");
+  });
+
+  it("env com duplicados -> deduplicado", () => {
+    const priority = resolveResearchProviderPriority(
+      "firecrawl,searxng,firecrawl,ollama-search,searxng,firecrawl"
+    );
+    assert.deepStrictEqual(priority.fullPriority, ["firecrawl", "searxng", "ollama-search"]);
+    assert.deepStrictEqual(priority.omnirouteSubProviders, ["firecrawl", "ollama-search"]);
+    assert.deepStrictEqual(priority.directFallbacks, ["searxng"]);
+  });
+
+  it("env com provider desconhecido -> ignorado", () => {
+    const priority = resolveResearchProviderPriority(
+      "unknown-provider,firecrawl,invalid_engine,ollama-search,fake-search,searxng"
+    );
+    assert.deepStrictEqual(priority.fullPriority, ["firecrawl", "ollama-search", "searxng"]);
+    assert.deepStrictEqual(priority.omnirouteSubProviders, ["firecrawl", "ollama-search"]);
+    assert.deepStrictEqual(priority.directFallbacks, ["searxng"]);
+  });
+
+  it("separar providers OmniRoute do fallback direto searxng e brave", () => {
+    const priority = resolveResearchProviderPriority("serper-search,searxng,firecrawl,brave");
+    assert.deepStrictEqual(priority.fullPriority, ["serper-search", "searxng", "firecrawl", "brave"]);
+    assert.deepStrictEqual(priority.omnirouteSubProviders, ["serper-search", "firecrawl"]);
+    assert.deepStrictEqual(priority.directFallbacks, ["searxng", "brave"]);
   });
 });
 

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { ToolRegistry } from "@/lib/ai/tools/registry";
 import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
 import { resolveResearchPolicy as resolveWebResearchPolicy } from "@/lib/ai/research/research-policy";
+import { resolveResearchProviderPriority } from "@/lib/ai/research/provider-priority";
 import { OmniRouteSearchProvider } from "@/lib/ai/research/providers/omniroute-search-provider";
 import { SearXNGProvider } from "@/lib/ai/research/providers/searxng-provider";
 import { decryptApiKey } from "@/lib/ai/crypto";
@@ -117,10 +118,13 @@ export async function GET(req: NextRequest) {
     searxngHealth = { ok: false, status: "DOWN", latencyMs: 0, error: err.message };
   }
 
+  const priorityInfo = resolveResearchProviderPriority();
   const meta = (latestResearchAudit?.metadata as any) || {};
   const researchInfo = {
     gateway: "omniroute",
-    priority: ["firecrawl", "ollama-search", "searxng"],
+    priority: priorityInfo.fullPriority,
+    omnirouteSubProviders: priorityInfo.omnirouteSubProviders,
+    directFallbacks: priorityInfo.directFallbacks,
     providers: {
       omniroute: omnirouteHealth,
       searxng: searxngHealth,

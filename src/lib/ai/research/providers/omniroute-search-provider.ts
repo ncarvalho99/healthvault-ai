@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { WebResearchProvider, SearchResult, SearchOptions, ProviderHealth } from "../types";
+import { resolveResearchProviderPriority } from "../provider-priority";
 
 export interface OmniRouteSearchProviderOptions {
   baseUrl?: string;
@@ -22,10 +23,16 @@ export class OmniRouteSearchProvider implements WebResearchProvider {
       process.env.E2E_AI_BASE_URL ||
       "https://omniroute-local.nclabs.dev/v1";
 
+    const priorityInfo = resolveResearchProviderPriority();
+
     this.baseUrl = rawBaseUrl.trim().replace(/\/+$/, "");
     this.apiKey = (options?.apiKey || process.env.OMNIROUTE_API_KEY || process.env.E2E_AI_API_KEY || "").trim();
-    this.defaultSubProvider = (options?.defaultSubProvider || "firecrawl").trim();
-    this.subProviderPriority = options?.subProviderPriority || ["firecrawl", "ollama-search", "serper-search"];
+    this.defaultSubProvider = (
+      options?.defaultSubProvider ||
+      priorityInfo.omnirouteSubProviders[0] ||
+      "firecrawl"
+    ).trim();
+    this.subProviderPriority = options?.subProviderPriority || priorityInfo.omnirouteSubProviders;
   }
 
   setCredentials(baseUrl: string, apiKey: string) {
@@ -178,13 +185,14 @@ export class OmniRouteSearchProvider implements WebResearchProvider {
       const rawProviders = Array.isArray(data?.data) ? data.data : [];
       const availableSubProviders = rawProviders.map((p: any) => String(p.id));
 
-      // Step 2: Live Search Probes for firecrawl and ollama-search
+      // Step 2: Live Search Probes according to resolved priority
       const subProviderProbes: Record<
         string,
         { ok: boolean; httpStatus?: number; latencyMs: number; resultCount: number; error?: string }
       > = {};
 
-      const subProvidersToProbe = ["firecrawl", "ollama-search"];
+      const priorityInfo = resolveResearchProviderPriority();
+      const subProvidersToProbe = priorityInfo.omnirouteSubProviders.slice(0, 2);
       let anyHealthySearch = false;
       let anySuccessfulHttp = false;
 

@@ -15,6 +15,7 @@ import { ResearchContextBuilder } from "./research-context-builder";
 import { OmniRouteSearchProvider } from "./providers/omniroute-search-provider";
 import { SearXNGProvider } from "./providers/searxng-provider";
 import { BraveSearchProvider } from "./providers/brave-provider";
+import { resolveResearchProviderPriority } from "./provider-priority";
 
 export interface ResearchOrchestratorOptions {
   userMessage: string;
@@ -54,18 +55,26 @@ export class ResearchOrchestrator {
       ];
     }
 
-    // Default chain: OmniRoute Search Gateway (Firecrawl/Ollama) -> SearXNG Local Fallback -> Brave (if configured)
-    const chain: WebResearchProvider[] = [
-      new OmniRouteSearchProvider({
-        baseUrl: options?.omnirouteBaseUrl,
-        apiKey: options?.omnirouteApiKey,
-        defaultSubProvider: "firecrawl",
-        subProviderPriority: ["firecrawl", "ollama-search", "serper-search"],
-      }),
-      new SearXNGProvider(),
-    ];
+    // Default chain configured by resolved priority
+    const priorityInfo = resolveResearchProviderPriority();
+    const chain: WebResearchProvider[] = [];
 
-    if (process.env.BRAVE_SEARCH_API_KEY) {
+    if (priorityInfo.omnirouteSubProviders.length > 0) {
+      chain.push(
+        new OmniRouteSearchProvider({
+          baseUrl: options?.omnirouteBaseUrl,
+          apiKey: options?.omnirouteApiKey,
+          defaultSubProvider: priorityInfo.omnirouteSubProviders[0],
+          subProviderPriority: priorityInfo.omnirouteSubProviders,
+        })
+      );
+    }
+
+    if (priorityInfo.directFallbacks.includes("searxng")) {
+      chain.push(new SearXNGProvider());
+    }
+
+    if (priorityInfo.directFallbacks.includes("brave") || process.env.BRAVE_SEARCH_API_KEY) {
       chain.push(new BraveSearchProvider());
     }
 

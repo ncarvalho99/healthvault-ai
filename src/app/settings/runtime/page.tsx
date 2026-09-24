@@ -145,6 +145,11 @@ export default function RuntimeStatusPage() {
                   <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-800/60 font-semibold">
                     Gateway: OmniRoute Search
                   </span>
+                  {data.researchInfo?.priority && (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 text-slate-300 border border-slate-800 hidden sm:inline">
+                      Prioridade: {data.researchInfo.priority.join(" → ")}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -196,6 +201,12 @@ export default function RuntimeStatusPage() {
                         </span>
                       </div>
                     )}
+                    <div className="flex justify-between">
+                      <span>Cadeia OmniRoute:</span>
+                      <span className="font-mono text-slate-300">
+                        {data.researchInfo?.omnirouteSubProviders?.join(" → ") || "firecrawl → ollama-search"}
+                      </span>
+                    </div>
                     <div className="flex justify-between">
                       <span>Latência Gateway:</span>
                       <span className="font-mono text-slate-300">{data.researchInfo?.providers?.omniroute?.latencyMs ?? 0}ms</span>
