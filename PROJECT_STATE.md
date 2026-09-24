@@ -20,7 +20,7 @@ HealthVault Container (LXC 133 — 172.26.128.58:3000)
        ├── Edge Middleware (src/middleware.ts — proteção total de rotas)
        ├── Response Pipeline (AssistantResponseProcessor, ReasoningFilter, MarkdownNormalizer)
        ├── Agent Tool Runtime:
-       │     ├── ToolRegistry (22 ferramentas clínicas e de sistema)
+       │     ├── ToolRegistry (27 ferramentas clínicas e de sistema)
        │     ├── ToolSelector (Scoping inteligente por intenção da mensagem)
        │     ├── PermissionEngine & ApprovalEngine (Políticas AUTO_APPLY vs REVIEW_FIRST)
        │     ├── IdempotencyEngine (Imutabilidade via toolCallId)
@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 30 testes unitários (`node:test` + `tsx`) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 61+ testes unitários (`node:test` + `tsx` em 26 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -83,7 +83,15 @@ AI_MAX_CONTEXT_CHARS=24000
 NODE_ENV="production"
 PORT=3000
 
+# Web-First Research Gateway & Retrieval
+WEB_RESEARCH_GATEWAY="omniroute"
+WEB_RESEARCH_PROVIDER_PRIORITY="firecrawl,ollama-search,searxng"
+WEB_RESEARCH_STRATEGY="aggregate"
+SEARXNG_BASE_URL="http://<SEARXNG_HOST>:8888" # Fallback local opcional (sem hardcode)
+BRAVE_SEARCH_API_KEY="" # Fallback externo opcional
+
 # Credenciais E2E Live (Opcional, apenas para execução de pnpm run test:e2e)
+E2E_REQUIRE_LIVE="false"
 E2E_AI_BASE_URL=""
 E2E_AI_API_KEY=""
 E2E_AI_MODEL="exploit"

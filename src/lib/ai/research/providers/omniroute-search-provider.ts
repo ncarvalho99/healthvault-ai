@@ -138,7 +138,10 @@ export class OmniRouteSearchProvider implements WebResearchProvider {
   }
 
   /**
-   * Health check and sub-provider discovery via GET /v1/search
+   * Health check and sub-provider validation via real probe calls:
+   * 1. Discovery via GET /v1/search.
+   * 2. Live probe execution via POST /v1/search for firecrawl and ollama-search.
+   * 3. Only classifies as HEALTHY when a real search probe returns results.
    */
   async healthCheck(): Promise<ProviderHealth> {
     const endpoint = this.getSearchEndpoint();
@@ -152,19 +155,20 @@ export class OmniRouteSearchProvider implements WebResearchProvider {
         headers["Authorization"] = `Bearer ${this.apiKey}`;
       }
 
+      // Step 1: Catalog discovery
       const res = await fetch(endpoint, {
         method: "GET",
         headers,
         signal: AbortSignal.timeout(5000),
       });
 
-      const latencyMs = Math.round(performance.now() - start);
+      const discoveryLatency = Math.round(performance.now() - start);
 
       if (!res.ok) {
         return {
           ok: false,
           provider: this.name,
-          latencyMs,
+          latencyMs: discoveryLatency,
           status: "DOWN",
           error: `HTTP ${res.status} ${res.statusText}`,
         };
@@ -174,14 +178,100 @@ export class OmniRouteSearchProvider implements WebResearchProvider {
       const rawProviders = Array.isArray(data?.data) ? data.data : [];
       const availableSubProviders = rawProviders.map((p: any) => String(p.id));
 
-      const hasFirecrawl = availableSubProviders.includes("firecrawl");
+      // Step 2: Live Search Probes for firecrawl and ollama-search
+      const subProviderProbes: Record<
+        string,
+        { ok: boolean; httpStatus?: number; latencyMs: number; resultCount: number; error?: string }
+      > = {};
+
+      const subProvidersToProbe = ["firecrawl", "ollama-search"];
+      let anyHealthySearch = false;
+      let anySuccessfulHttp = false;
+
+      for (const sp of subProvidersToProbe) {
+        const probeStart = performance.now();
+        try {
+          const probeHeaders: Record<string, string> = {
+            "Content-Type": "application/json",
+            "X-Request-Id": crypto.randomUUID(),
+          };
+          if (this.apiKey) {
+            probeHeaders["Authorization"] = `Bearer ${this.apiKey}`;
+          }
+
+          const probeRes = await fetch(endpoint, {
+            method: "POST",
+            headers: probeHeaders,
+            body: JSON.stringify({
+              query: "health",
+              provider: sp,
+              max_results: 1,
+            }),
+            signal: AbortSignal.timeout(8000),
+          });
+
+          const probeLatency = Math.round(performance.now() - probeStart);
+
+          if (!probeRes.ok) {
+            let errMsg = `HTTP ${probeRes.status}`;
+            try {
+              const errJson = await probeRes.json();
+              if (errJson?.error?.message) errMsg = errJson.error.message;
+            } catch {
+              // ignore
+            }
+            subProviderProbes[sp] = {
+              ok: false,
+              httpStatus: probeRes.status,
+              latencyMs: probeLatency,
+              resultCount: 0,
+              error: errMsg,
+            };
+          } else {
+            anySuccessfulHttp = true;
+            const probeJson = await probeRes.json();
+            const results = Array.isArray(probeJson)
+              ? probeJson
+              : probeJson.results || probeJson.data || [];
+            const resultCount = Array.isArray(results) ? results.length : 0;
+
+            if (resultCount > 0) {
+              anyHealthySearch = true;
+            }
+
+            subProviderProbes[sp] = {
+              ok: resultCount > 0,
+              httpStatus: probeRes.status,
+              latencyMs: probeLatency,
+              resultCount,
+            };
+          }
+        } catch (probeErr: any) {
+          subProviderProbes[sp] = {
+            ok: false,
+            latencyMs: Math.round(performance.now() - probeStart),
+            resultCount: 0,
+            error: probeErr.message,
+          };
+        }
+      }
+
+      const totalLatency = Math.round(performance.now() - start);
+
+      let status: "HEALTHY" | "DEGRADED" | "DOWN" = "DOWN";
+      if (anyHealthySearch) {
+        status = "HEALTHY";
+      } else if (anySuccessfulHttp || availableSubProviders.length > 0) {
+        status = "DEGRADED";
+      }
 
       return {
-        ok: true,
+        ok: anyHealthySearch,
         provider: this.name,
-        latencyMs,
-        status: hasFirecrawl ? "HEALTHY" : "DEGRADED",
+        latencyMs: totalLatency,
+        status,
         availableSubProviders,
+        subProviderProbes,
       };
     } catch (err: any) {
       return {

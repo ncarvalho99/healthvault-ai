@@ -241,6 +241,16 @@ describe("Web-First Research — ResearchCache", () => {
 });
 
 describe("Web-First Research — SearXNG Provider Security & SSRF Protection", () => {
+  it("should safely return UNCONFIGURED when no base URL is provided without hardcoded fallback", async () => {
+    const unconfiguredProvider = new SearXNGProvider("");
+    const health = await unconfiguredProvider.healthCheck();
+    assert.strictEqual(health.ok, false);
+    assert.strictEqual(health.status, "UNCONFIGURED");
+
+    const searchResults = await unconfiguredProvider.search("test");
+    assert.deepStrictEqual(searchResults, []);
+  });
+
   it("should reject malicious endpoints and cloud metadata IPs", async () => {
     const providerWithMetadata = new SearXNGProvider("http://169.254.169.254");
 

@@ -73,7 +73,14 @@ export async function GET(req: NextRequest) {
   });
 
   // 6. Multi-provider Health Diagnostics (OmniRoute Search Gateway + SearXNG)
-  let omnirouteHealth = { ok: false, status: "DOWN", latencyMs: 0, error: "No integration" };
+  let omnirouteHealth: {
+    ok: boolean;
+    status: string;
+    latencyMs: number;
+    error: string;
+    availableSubProviders?: string[];
+    subProviderProbes?: Record<string, any>;
+  } = { ok: false, status: "DOWN", latencyMs: 0, error: "No integration" };
   const firstIntegration = integrations[0];
   if (firstIntegration) {
     try {
@@ -88,6 +95,8 @@ export async function GET(req: NextRequest) {
         status: h.status || (h.ok ? "HEALTHY" : "DOWN"),
         latencyMs: h.latencyMs || 0,
         error: h.error || "",
+        availableSubProviders: h.availableSubProviders || [],
+        subProviderProbes: h.subProviderProbes || {},
       };
     } catch (err: any) {
       omnirouteHealth = { ok: false, status: "DOWN", latencyMs: 0, error: err.message };

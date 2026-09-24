@@ -8,7 +8,7 @@ export class SearXNGProvider implements WebResearchProvider {
     this.baseUrl = (
       customBaseUrl ||
       process.env.SEARXNG_BASE_URL ||
-      "http://172.26.128.61:8888"
+      ""
     ).trim().replace(/\/+$/, "");
   }
 
@@ -48,6 +48,10 @@ export class SearXNGProvider implements WebResearchProvider {
    * If empty or fails, falls back to 'science' or no category restriction.
    */
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
+    if (!this.baseUrl) {
+      return [];
+    }
+
     const timeoutMs = options?.timeoutMs || 8000;
     const maxResults = options?.maxResults || 8;
 
@@ -127,6 +131,16 @@ export class SearXNGProvider implements WebResearchProvider {
   }
 
   async healthCheck(): Promise<ProviderHealth> {
+    if (!this.baseUrl) {
+      return {
+        ok: false,
+        provider: this.name,
+        latencyMs: 0,
+        status: "UNCONFIGURED",
+        error: "SearXNG URL is not configured (missing SEARXNG_BASE_URL)",
+      };
+    }
+
     const start = performance.now();
     try {
       const endpoint = `${this.baseUrl}/search?q=health&format=json&categories=general`;

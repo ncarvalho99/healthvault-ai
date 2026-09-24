@@ -160,16 +160,44 @@ export default function RuntimeStatusPage() {
                   <div className="text-[11px] space-y-1 text-slate-400">
                     <div className="flex justify-between">
                       <span>Status do Gateway:</span>
-                      <strong className={data.researchInfo?.providers?.omniroute?.ok ? "text-emerald-400" : "text-amber-400"}>
-                        {data.researchInfo?.providers?.omniroute?.ok ? "✓ Saudável" : "Indisponível"}
+                      <strong
+                        className={
+                          data.researchInfo?.providers?.omniroute?.status === "HEALTHY"
+                            ? "text-emerald-400"
+                            : data.researchInfo?.providers?.omniroute?.status === "DEGRADED"
+                            ? "text-amber-400"
+                            : "text-rose-400"
+                        }
+                      >
+                        {data.researchInfo?.providers?.omniroute?.status === "HEALTHY"
+                          ? "✓ Saudável (Search OK)"
+                          : data.researchInfo?.providers?.omniroute?.status === "DEGRADED"
+                          ? "⚠ Degradado"
+                          : "Indisponível"}
                       </strong>
                     </div>
+                    {data.researchInfo?.providers?.omniroute?.subProviderProbes?.firecrawl && (
+                      <div className="flex justify-between">
+                        <span>Firecrawl Probe:</span>
+                        <span className="font-mono text-slate-300">
+                          {data.researchInfo.providers.omniroute.subProviderProbes.firecrawl.ok
+                            ? `✓ ${data.researchInfo.providers.omniroute.subProviderProbes.firecrawl.resultCount} res (${data.researchInfo.providers.omniroute.subProviderProbes.firecrawl.latencyMs}ms)`
+                            : `✕ ${data.researchInfo.providers.omniroute.subProviderProbes.firecrawl.error || "Erro"}`}
+                        </span>
+                      </div>
+                    )}
+                    {data.researchInfo?.providers?.omniroute?.subProviderProbes?.["ollama-search"] && (
+                      <div className="flex justify-between">
+                        <span>Ollama Probe:</span>
+                        <span className="font-mono text-slate-300">
+                          {data.researchInfo.providers.omniroute.subProviderProbes["ollama-search"].ok
+                            ? `✓ ${data.researchInfo.providers.omniroute.subProviderProbes["ollama-search"].resultCount} res`
+                            : `✕ ${data.researchInfo.providers.omniroute.subProviderProbes["ollama-search"].error || "Erro"}`}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
-                      <span>Provedores:</span>
-                      <span className="font-mono text-slate-300">Firecrawl → Ollama → Serper</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Latência:</span>
+                      <span>Latência Gateway:</span>
                       <span className="font-mono text-slate-300">{data.researchInfo?.providers?.omniroute?.latencyMs ?? 0}ms</span>
                     </div>
                   </div>
@@ -186,8 +214,20 @@ export default function RuntimeStatusPage() {
                   <div className="text-[11px] space-y-1 text-slate-400">
                     <div className="flex justify-between">
                       <span>Status Instância:</span>
-                      <strong className={data.researchInfo?.providers?.searxng?.ok ? "text-emerald-400" : "text-amber-400"}>
-                        {data.researchInfo?.providers?.searxng?.ok ? "✓ Conectado" : "Degradado"}
+                      <strong
+                        className={
+                          data.researchInfo?.providers?.searxng?.ok
+                            ? "text-emerald-400"
+                            : data.researchInfo?.providers?.searxng?.status === "UNCONFIGURED"
+                            ? "text-slate-400"
+                            : "text-amber-400"
+                        }
+                      >
+                        {data.researchInfo?.providers?.searxng?.ok
+                          ? "✓ Conectado"
+                          : data.researchInfo?.providers?.searxng?.status === "UNCONFIGURED"
+                          ? "Não configurado"
+                          : "Degradado"}
                       </strong>
                     </div>
                     <div className="flex justify-between">

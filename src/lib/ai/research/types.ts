@@ -36,13 +36,22 @@ export interface SearchResult {
   searchProvider?: string;
 }
 
+export interface SubProviderProbeResult {
+  ok: boolean;
+  httpStatus?: number;
+  latencyMs: number;
+  resultCount: number;
+  error?: string;
+}
+
 export interface ProviderHealth {
   ok: boolean;
   provider: string;
   latencyMs?: number;
   error?: string;
   availableSubProviders?: string[];
-  status?: "HEALTHY" | "DEGRADED" | "DOWN";
+  status?: "HEALTHY" | "DEGRADED" | "DOWN" | "UNCONFIGURED";
+  subProviderProbes?: Record<string, SubProviderProbeResult>;
 }
 
 export interface SearchOptions {
