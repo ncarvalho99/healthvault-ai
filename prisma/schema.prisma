@@ -1,0 +1,528 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum SenderType {
+  USER
+  AI
+  SYSTEM
+  TOOL
+}
+
+enum RecommendationStatus {
+  DRAFT
+  AI_SUGGESTION
+  DOCTOR_RECOMMENDATION
+  USER_NOTE
+  CONFIRMED
+  ARCHIVED
+}
+
+enum SourceType {
+  AI_AGENT
+  DOCTOR
+  USER_NOTE
+  LAB_REPORT
+}
+
+enum ActorType {
+  USER
+  AI
+  DOCTOR
+  SYSTEM
+}
+
+enum LabFlag {
+  NORMAL
+  HIGH
+  LOW
+  CRITICAL
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  username      String    @unique
+  passwordHash  String
+  fullName      String
+  role          Role      @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  conversations   Conversation[]
+  recommendations Recommendation[]
+  medications     Medication[]
+  dietPlans       DietPlan[]
+  bodyMetrics     BodyMetric[]
+  symptoms        Symptom[]
+  labTests        LabTest[]
+  attachments     Attachment[]
+  reminders       Reminder[]
+  auditLogs       AuditLog[]
+  aiIntegrations  AiIntegration[]
+  aiToolExecutions AiToolExecution[]
+  aiWritePolicy   AiWritePolicy?
+
+  @@map("users")
+}
+
+model Conversation {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  title           String
+  summary         String?  @db.Text
+  summaryData     Json?    @map("summary_data")
+  isFavorite      Boolean  @default(false) @map("is_favorite")
+  isArchived      Boolean  @default(false) @map("is_archived")
+  tags            String[] @default([])
+  aiIntegrationId String?  @map("ai_integration_id")
+  activeModel     String?  @map("active_model")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  aiIntegration   AiIntegration?   @relation(fields: [aiIntegrationId], references: [id], onDelete: SetNull)
+  messages        Message[]
+  recommendations Recommendation[]
+  attachments     Attachment[]
+  bodyMetrics     BodyMetric[]
+  symptoms        Symptom[]
+  labTests        LabTest[]
+  toolExecutions  AiToolExecution[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String     @id @default(uuid())
+  conversationId String     @map("conversation_id")
+  senderType     SenderType @map("sender_type")
+  senderName     String     @map("sender_name")
+  content        String     @db.Text
+  metadata       Json?
+  toolCalls      Json?      @map("tool_calls")
+  toolCallId     String?    @map("tool_call_id")
+  isEdited       Boolean    @default(false) @map("is_edited")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  conversation   Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  versions       MessageVersion[]
+  toolExecutions AiToolExecution[]
+
+  @@index([conversationId])
+  @@map("messages")
+}
+
+model MessageVersion {
+  id            String   @id @default(uuid())
+  messageId     String   @map("message_id")
+  versionNumber Int      @map("version_number")
+  content       String   @db.Text
+  editedBy      String   @map("edited_by")
+  reason        String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, versionNumber])
+  @@map("message_versions")
+}
+
+model Recommendation {
+  id             String               @id @default(uuid())
+  userId         String               @map("user_id")
+  conversationId String?              @map("conversation_id")
+  title          String
+  status         RecommendationStatus @default(AI_SUGGESTION)
+  sourceType     SourceType           @default(AI_AGENT) @map("source_type")
+  sourceName     String?              @map("source_name")
+  aiModel        String?              @map("ai_model")
+  notes          String?              @db.Text
+  currentVersion Int                  @default(1) @map("current_version")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  user         User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation?           @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  versions     RecommendationVersion[]
+  medications  Medication[]
+
+  @@index([userId])
+  @@index([conversationId])
+  @@map("recommendations")
+}
+
+model RecommendationVersion {
+  id                String               @id @default(uuid())
+  recommendationId  String               @map("recommendation_id")
+  versionNumber     Int                  @map("version_number")
+  status            RecommendationStatus
+  summarySnapshot   Json                 @map("summary_snapshot")
+  changeReason      String?              @map("change_reason")
+  conversationId    String?              @map("conversation_id")
+  actorType         ActorType            @default(USER) @map("actor_type")
+  actorName         String?              @map("actor_name")
+  informationOrigin String?              @default("AI_SUGGESTED") @map("information_origin")
+  createdAt         DateTime             @default(now()) @map("created_at")
+
+  recommendation Recommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@unique([recommendationId, versionNumber])
+  @@map("recommendation_versions")
+}
+
+model Medication {
+  id               String   @id @default(uuid())
+  userId           String   @map("user_id")
+  recommendationId String?  @map("recommendation_id")
+  name             String
+  genericName      String?  @map("generic_name")
+  brandName        String?  @map("brand_name")
+  category         String?
+  form             String?
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recommendation Recommendation?     @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
+  versions       MedicationVersion[]
+  symptoms       Symptom[]
+
+  @@index([userId])
+  @@map("medications")
+}
+
+model MedicationVersion {
+  id                String    @id @default(uuid())
+  medicationId      String    @map("medication_id")
+  versionNumber     Int       @map("version_number")
+  doseValue         Float     @map("dose_value")
+  doseUnit          String    @map("dose_unit")
+  frequency         String
+  schedule          String?
+  route             String?
+  startDate         DateTime? @map("start_date")
+  endDate           DateTime? @map("end_date")
+  instructions      String?   @db.Text
+  changeReason      String?   @map("change_reason")
+  conversationId    String?   @map("conversation_id")
+  actorType         ActorType @default(USER) @map("actor_type")
+  actorName         String?   @map("actor_name")
+  informationOrigin String?   @default("USER_REPORTED") @map("information_origin")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  medication Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+
+  @@unique([medicationId, versionNumber])
+  @@map("medication_versions")
+}
+
+model DietPlan {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  title          String
+  goal           String?
+  currentVersion Int      @default(1) @map("current_version")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions DietVersion[]
+
+  @@index([userId])
+  @@map("diet_plans")
+}
+
+model DietVersion {
+  id                String   @id @default(uuid())
+  dietPlanId        String   @map("diet_plan_id")
+  versionNumber     Int      @map("version_number")
+  targetCalories    Int      @map("target_calories")
+  targetProteinG    Float    @map("target_protein_g")
+  targetCarbsG      Float    @map("target_carbs_g")
+  targetFatG        Float    @map("target_fat_g")
+  changeReason      String?  @map("change_reason")
+  conversationId    String?  @map("conversation_id")
+  informationOrigin String?  @default("USER_REPORTED") @map("information_origin")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  dietPlan DietPlan @relation(fields: [dietPlanId], references: [id], onDelete: Cascade)
+  meals    Meal[]
+
+  @@unique([dietPlanId, versionNumber])
+  @@map("diet_versions")
+}
+
+model Meal {
+  id            String  @id @default(uuid())
+  dietVersionId String  @map("diet_version_id")
+  name          String
+  scheduledTime String? @map("scheduled_time")
+
+  dietVersion DietVersion @relation(fields: [dietVersionId], references: [id], onDelete: Cascade)
+  foods       MealFood[]
+
+  @@map("meals")
+}
+
+model Food {
+  id             String  @id @default(uuid())
+  name           String  @unique
+  caloriesPer100 Float   @map("calories_per_100")
+  proteinPer100  Float   @map("protein_per_100")
+  carbsPer100    Float   @map("carbs_per_100")
+  fatPer100      Float   @map("fat_per_100")
+
+  mealFoods MealFood[]
+
+  @@map("foods")
+}
+
+model MealFood {
+  id       String @id @default(uuid())
+  mealId   String @map("meal_id")
+  foodId   String @map("food_id")
+  portionG Float  @map("portion_g")
+
+  meal Meal @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  food Food @relation(fields: [foodId], references: [id], onDelete: Cascade)
+
+  @@map("meal_foods")
+}
+
+model BodyMetric {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  date           DateTime  @default(now())
+  weightKg       Float     @map("weight_kg")
+  bodyFatPct     Float?    @map("body_fat_pct")
+  muscleMassKg   Float?    @map("muscle_mass_kg")
+  waistCm        Float?    @map("waist_cm")
+  chestCm        Float?    @map("chest_cm")
+  notes          String?
+  conversationId String?   @map("conversation_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([date])
+  @@map("body_metrics")
+}
+
+model Symptom {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  symptom        String
+  severity       Int
+  date           DateTime  @default(now())
+  startTime      String?   @map("start_time")
+  endTime        String?   @map("end_time")
+  description    String?   @db.Text
+  possibleTrigger String?  @map("possible_trigger")
+  medicationId   String?   @map("medication_id")
+  conversationId String?   @map("conversation_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  medication   Medication?   @relation(fields: [medicationId], references: [id], onDelete: SetNull)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([date])
+  @@map("symptoms")
+}
+
+model LabTest {
+  id                 String    @id @default(uuid())
+  userId             String    @map("user_id")
+  testName           String    @map("test_name")
+  category           String
+  testDate           DateTime  @map("test_date")
+  markerName         String    @map("marker_name")
+  resultValue        Float     @map("result_value")
+  unit               String
+  referenceRangeLow  Float?    @map("reference_range_low")
+  referenceRangeHigh Float?    @map("reference_range_high")
+  flag               LabFlag   @default(NORMAL)
+  notes              String?
+  conversationId     String?   @map("conversation_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([testDate])
+  @@map("lab_tests")
+}
+
+model Attachment {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  conversationId String?  @map("conversation_id")
+  filename       String
+  filePath       String   @map("file_path")
+  mimeType       String   @map("mime_type")
+  fileSize       Int      @map("file_size")
+  hashSha256     String?  @map("hash_sha256")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@map("attachments")
+}
+
+model Reminder {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  title       String
+  dueDate     DateTime  @map("due_date")
+  isCompleted Boolean   @default(false) @map("is_completed")
+  notes       String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("reminders")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  action    String
+  entity    String
+  entityId  String?  @map("entity_id")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  metadata  Json?
+  timestamp DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+// ----------------------------------------------------
+// AI Agent & OmniRoute Integration Models
+// ----------------------------------------------------
+
+model AiIntegration {
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  name                String
+  providerType        String    @default("OMNIROUTE") @map("provider_type")
+  baseUrl             String    @map("base_url")
+  encryptedApiKey     String    @map("encrypted_api_key")
+  enabled             Boolean   @default(true)
+  isDefault           Boolean   @default(true) @map("is_default")
+  defaultModel        String?   @map("default_model")
+  defaultCombo        String?   @map("default_combo")
+  requestTimeoutMs    Int       @default(120000) @map("request_timeout_ms")
+  connectionStatus    String    @default("UNTESTED") @map("connection_status")
+  lastTestedAt        DateTime? @map("last_tested_at")
+  lastSuccessAt       DateTime? @map("last_success_at")
+  lastErrorAt         DateTime? @map("last_error_at")
+  lastErrorMessage    String?   @map("last_error_message")
+  modelsLastSyncedAt  DateTime? @map("models_last_synced_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  models         AiModel[]
+  conversations  Conversation[]
+  toolExecutions AiToolExecution[]
+
+  @@index([userId])
+  @@map("ai_integrations")
+}
+
+model AiModel {
+  id                  String    @id @default(uuid())
+  integrationId       String    @map("integration_id")
+  externalId          String    @map("external_id")
+  displayName         String    @map("display_name")
+  ownedBy             String?   @map("owned_by")
+  modelType           String    @default("combo") @map("model_type")
+  isCombo             Boolean   @default(true) @map("is_combo")
+  supportsChat        Boolean   @default(true) @map("supports_chat")
+  supportsStreaming   Boolean   @default(true) @map("supports_streaming")
+  supportsTools       Boolean   @default(true) @map("supports_tools")
+  lastSeenAt          DateTime  @default(now()) @map("last_seen_at")
+  rawMetadata         Json?     @map("raw_metadata")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  integration AiIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, externalId])
+  @@index([integrationId])
+  @@map("ai_models")
+}
+
+model AiToolExecution {
+  id               String    @id @default(uuid())
+  userId           String    @map("user_id")
+  conversationId   String    @map("conversation_id")
+  messageId        String?   @map("message_id")
+  integrationId    String?   @map("integration_id")
+  toolCallId       String    @map("tool_call_id")
+  toolName         String    @map("tool_name")
+  status           String    @default("EXECUTED") // PENDING_APPROVAL, EXECUTED, REJECTED, FAILED
+  inputJson        Json      @map("input_json")
+  outputJson       Json?     @map("output_json")
+  requiresApproval Boolean   @default(false) @map("requires_approval")
+  approvedAt       DateTime? @map("approved_at")
+  approvedBy       String?   @map("approved_by")
+  startedAt        DateTime  @default(now()) @map("started_at")
+  completedAt      DateTime? @map("completed_at")
+  errorCode        String?   @map("error_code")
+  errorMessage     String?   @map("error_message")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation  Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message       Message?       @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  integration   AiIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId])
+  @@index([toolCallId])
+  @@map("ai_tool_executions")
+}
+
+model AiWritePolicy {
+  id               String   @id @default(uuid())
+  userId           String   @unique @map("user_id")
+  recommendations  String   @default("AUTO_APPLY") @map("recommendations")
+  nutrition        String   @default("AUTO_APPLY") @map("nutrition")
+  metrics          String   @default("AUTO_APPLY") @map("metrics")
+  symptoms         String   @default("AUTO_APPLY") @map("symptoms")
+  labs             String   @default("REVIEW_FIRST") @map("labs")
+  medications      String   @default("REVIEW_FIRST") @map("medications")
+  dosageChanges    String   @default("REVIEW_FIRST") @map("dosage_changes")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_write_policies")
+}
