@@ -18,6 +18,7 @@ import {
   Globe,
   Search,
 } from "lucide-react";
+import { isHealthAiModel, isExploitModel, isWebFirstRequiredModel } from "@/lib/ai/models/model-identification";
 
 export default function RuntimeStatusPage() {
   const [data, setData] = useState<any>(null);
@@ -327,12 +328,12 @@ export default function RuntimeStatusPage() {
                           <span>Reasoning Policy:</span>
                           <span
                             className={`font-mono font-bold ${
-                              m.externalId === "exploit" || m.externalId === "health-ai"
+                              isWebFirstRequiredModel(m.externalId)
                                 ? "text-rose-400"
                                 : "text-blue-400"
                             }`}
                           >
-                            {m.externalId === "exploit" || m.externalId === "health-ai"
+                            {isWebFirstRequiredModel(m.externalId)
                               ? "DISABLED (Filtered)"
                               : m.reasoningPolicy || "AUTO"}
                           </span>
@@ -341,17 +342,17 @@ export default function RuntimeStatusPage() {
                           <span>Web Research Policy:</span>
                           <span
                             className={`font-mono font-bold ${
-                              m.externalId === "exploit" || m.externalId === "health-ai"
+                              isWebFirstRequiredModel(m.externalId)
                                 ? "text-emerald-400"
                                 : "text-slate-400"
                             }`}
                           >
-                            {m.externalId === "exploit" || m.externalId === "health-ai"
+                            {isWebFirstRequiredModel(m.externalId)
                               ? "REQUIRED (Web-First)"
                               : m.webResearchPolicy || "AUTO"}
                           </span>
                         </div>
-                        {m.externalId === "health-ai" && (
+                        {isHealthAiModel(m.externalId) && (
                           <>
                             <div className="flex justify-between">
                               <span>HealthVault Aware:</span>
@@ -373,7 +374,7 @@ export default function RuntimeStatusPage() {
                             {data.researchInfo?.activeProvider || "SearXNG"}
                           </span>
                         </div>
-                        {(m.externalId === "exploit" || m.externalId === "health-ai") && (
+                        {isWebFirstRequiredModel(m.externalId) && (
                           <div className="pt-1.5 border-t border-slate-900 text-[10px] space-y-0.5 text-slate-400">
                             <div className="flex justify-between">
                               <span>Última Pesquisa:</span>

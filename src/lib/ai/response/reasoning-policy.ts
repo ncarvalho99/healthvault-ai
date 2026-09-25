@@ -1,19 +1,12 @@
 import { ReasoningPolicy } from "./types";
+import { isWebFirstRequiredModel } from "../models/model-identification";
 
 /**
  * Resolves the operational reasoning policy for a given model or combo.
- * Default initial policy: 'exploit' => DISABLED, all other combos/models => AUTO.
+ * Exact matching: 'exploit' & 'health-ai' => DISABLED, all other combos/models => AUTO.
  */
 export function resolveReasoningPolicy(modelId: string): ReasoningPolicy {
-  if (!modelId) return "AUTO";
-  const normalized = modelId.trim().toLowerCase();
-
-  if (
-    normalized === "exploit" ||
-    normalized.includes("exploit") ||
-    normalized === "health-ai" ||
-    normalized.includes("health-ai")
-  ) {
+  if (isWebFirstRequiredModel(modelId)) {
     return "DISABLED";
   }
 

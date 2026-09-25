@@ -1,13 +1,14 @@
 import { ResearchPolicy } from "./types";
+import { isWebFirstRequiredModel } from "../models/model-identification";
 
 /**
  * Resolves the operational Web Research Policy for a given model or combo.
  *
  * Architecture rule:
- * - 'exploit' => REQUIRED (model knowledge base may be stale or untrusted for external facts; web preflight is mandatory)
+ * - 'health-ai' & 'exploit' => REQUIRED (web preflight is mandatory for external factual questions)
  * - other combos/models => AUTO (researches only when explicit external or current clinical information is sought)
  *
- * Never spread `if (model === "exploit")` across codebase.
+ * Exact model matching via isWebFirstRequiredModel (no loose includes substring checks).
  */
 export function resolveResearchPolicy(
   modelId: string,
@@ -17,15 +18,7 @@ export function resolveResearchPolicy(
     return userOverride;
   }
 
-  if (!modelId) return "AUTO";
-  const normalized = modelId.trim().toLowerCase();
-
-  if (
-    normalized === "exploit" ||
-    normalized.includes("exploit") ||
-    normalized === "health-ai" ||
-    normalized.includes("health-ai")
-  ) {
+  if (isWebFirstRequiredModel(modelId)) {
     return "REQUIRED";
   }
 

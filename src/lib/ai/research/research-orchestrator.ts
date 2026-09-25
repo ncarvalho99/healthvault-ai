@@ -16,6 +16,7 @@ import { OmniRouteSearchProvider } from "./providers/omniroute-search-provider";
 import { SearXNGProvider } from "./providers/searxng-provider";
 import { BraveSearchProvider } from "./providers/brave-provider";
 import { resolveResearchProviderPriority } from "./provider-priority";
+import { QuerySanitizer } from "./query-sanitizer";
 
 export interface ResearchOrchestratorOptions {
   userMessage: string;
@@ -195,10 +196,19 @@ export class ResearchOrchestrator {
     let lastErrorDetail: string | undefined;
 
     // Queries to execute: base queries plus first domain-targeted query if available
-    const queriesToRun = [...baseQueries];
+    const rawQueriesToRun = [...baseQueries];
     if (intentAnalysis.domainTargetedQueries && intentAnalysis.domainTargetedQueries.length > 0) {
-      queriesToRun.push(intentAnalysis.domainTargetedQueries[0]);
+      rawQueriesToRun.push(intentAnalysis.domainTargetedQueries[0]);
     }
+
+    // Server-side privacy minimization & PII redaction on all search queries
+    const queriesToRun = Array.from(
+      new Set(
+        rawQueriesToRun
+          .map((q) => QuerySanitizer.sanitizeAndMinimize(q))
+          .filter((q) => q.length > 0)
+      )
+    );
 
     for (const provider of providers) {
       providersAttempted.push(provider.name);

@@ -12,13 +12,15 @@ import { OmniRouteSearchProvider } from "../../src/lib/ai/research/providers/omn
 import { SearchResult, WebResearchProvider } from "../../src/lib/ai/research/types";
 
 describe("Web-First Research — ResearchPolicy", () => {
-  it("should resolve REQUIRED for exploit and AUTO for others", () => {
+  it("should resolve REQUIRED for exploit and health-ai and AUTO for others", () => {
     assert.strictEqual(resolveResearchPolicy("exploit"), "REQUIRED");
     assert.strictEqual(resolveResearchPolicy("EXPLOIT"), "REQUIRED");
-    assert.strictEqual(resolveResearchPolicy("exploit-v2"), "REQUIRED");
+    assert.strictEqual(resolveResearchPolicy("health-ai"), "REQUIRED");
+    assert.strictEqual(resolveResearchPolicy("HEALTH-AI"), "REQUIRED");
     assert.strictEqual(resolveResearchPolicy("demigod-flash"), "AUTO");
     assert.strictEqual(resolveResearchPolicy("demigod-high"), "AUTO");
     assert.strictEqual(resolveResearchPolicy("claude-sonnet"), "AUTO");
+    assert.strictEqual(resolveResearchPolicy("exploit-v2"), "AUTO");
   });
 
   it("should respect explicit policy override when provided", () => {
