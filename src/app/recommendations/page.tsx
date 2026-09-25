@@ -30,10 +30,6 @@ export default function RecommendationsPage() {
   // New Recommendation Form State
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
-  const [calories, setCalories] = useState<number | string>("");
-  const [protein, setProtein] = useState<number | string>("");
-  const [carbs, setCarbs] = useState<number | string>("");
-  const [fat, setFat] = useState<number | string>("");
 
   const showToast = (message: string, type: "success" | "error" | "info" = "success") => {
     setToast({ message, type });
@@ -71,15 +67,6 @@ export default function RecommendationsPage() {
         body: JSON.stringify({
           title,
           notes,
-          summarySnapshot: {
-            nutrition: {
-              calories: Number(calories),
-              protein_g: Number(protein),
-              carbs_g: Number(carbs),
-              fat_g: Number(fat),
-            },
-            medications: [],
-          },
           changeReason: "Iniciação do protocolo",
         }),
       });
@@ -130,7 +117,6 @@ export default function RecommendationsPage() {
           title: editTitle,
           notes: editNotes,
           status: editStatus,
-          summarySnapshot: editingRec.versions?.[0]?.summarySnapshot || {},
           changeReason: editReason,
         }),
       });
@@ -488,48 +474,10 @@ export default function RecommendationsPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Calorias (kcal)</label>
-                  <input
-                    type="number"
-                    placeholder="ex: 2200"
-                    value={calories}
-                    onChange={(e) => setCalories(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Proteína (g)</label>
-                  <input
-                    type="number"
-                    placeholder="ex: 190"
-                    value={protein}
-                    onChange={(e) => setProtein(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Carboidratos (g)</label>
-                  <input
-                    type="number"
-                    placeholder="ex: 200"
-                    value={carbs}
-                    onChange={(e) => setCarbs(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Gorduras (g)</label>
-                  <input
-                    type="number"
-                    placeholder="ex: 60"
-                    value={fat}
-                    onChange={(e) => setFat(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
-                  />
-                </div>
-              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Dieta, medicamentos e peso deste protocolo são capturados automaticamente do estado atual do
+                HealthVault. Para mudar metas nutricionais, atualize a dieta na página Dieta antes de criar o protocolo.
+              </p>
 
               <div className="flex justify-end gap-2 pt-3">
                 <button

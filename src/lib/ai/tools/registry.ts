@@ -2,7 +2,6 @@ import { HealthVaultTool, OpenAIToolDefinition } from "./types";
 import { z } from "zod";
 import { MedicationService } from "../../services/medication-service";
 import { RecommendationService } from "../../services/recommendation-service";
-import { RecommendationSnapshotBuilder } from "../../services/recommendation-snapshot-builder";
 import { DietService } from "../../services/diet-service";
 import { HealthService } from "../../services/health-service";
 import { db } from "../../db";
@@ -220,11 +219,10 @@ ToolRegistry.register({
     reason: z.string().optional().describe("Reason for this new recommendation"),
   }),
   handler: async (ctx, args) => {
-    const snapshot = await RecommendationSnapshotBuilder.build(ctx.userId);
+    // RecommendationService builds the authoritative snapshot inside its transaction
     const rec = await RecommendationService.create(ctx.userId, {
       title: args.title,
       notes: args.notes,
-      summarySnapshot: snapshot,
       changeReason: args.reason || "Recomendação proposta pelo assistente",
       conversationId: ctx.conversationId,
       actorType: ActorType.AI,
@@ -257,13 +255,11 @@ ToolRegistry.register({
     });
     if (!existing) return { success: false, error: { code: "NOT_FOUND", message: "Recomendação não encontrada" } };
 
-    const freshSnapshot = await RecommendationSnapshotBuilder.build(ctx.userId);
-
+    // RecommendationService builds the authoritative snapshot inside its transaction
     const updated = await RecommendationService.update(ctx.userId, {
       recommendationId: existing.id,
       title: args.title,
       notes: args.notes,
-      summarySnapshot: freshSnapshot,
       changeReason: args.reason,
       conversationId: ctx.conversationId,
       actorType: ActorType.AI,

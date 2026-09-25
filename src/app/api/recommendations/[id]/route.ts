@@ -95,6 +95,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       conversationId: conversationId || existing.conversationId,
       actorType,
       actorName: actorName || user!.username,
+      informationOrigin: actorType === ActorType.USER ? "USER_REPORTED" : undefined,
       // RecommendationService owns the RECOMMENDATION_VERSION_CREATED audit
       auditContext: { ipAddress: ip, userAgent },
     });

@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 132 testes unitários (`node:test` + `tsx` em 42 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 157 testes unitários (`node:test` + `tsx` em 52 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -194,6 +194,16 @@ E2E_AI_MODEL="exploit"
       - Dashboard: remoção dos fallbacks de 2100 kcal / 190g proteína e do aviso estático "Em 14 dias / Titulação de dosagem", substituídos por dados reais ou indicadores neutros (`--` / `Nenhuma revisão agendada`).
       - Formulários de Cadastro (Métricas, Laboratório, Dieta e Recomendações): remoção de valores pré-populados de exemplo (83.0 kg, 15.5% BF, 2100 kcal, etc.), utilizando campos limpos e placeholders explicativos.
     - **Suíte de Testes Expandida**: 10 novos testes de regressão em `tests/unit/functional-consistency-ui.test.ts`, totalizando 131 testes unitários com 100% de aprovação.
+14. **Autorização de Escrita por Domínio & Estado Explícito de Conflito (commits `f5a296b` e seguinte)**:
+    - **Detecção de domínio compartilhada** (`src/lib/ai/tools/domain-intent.ts`): `ToolSelector` e `WriteIntentGuard` usam as mesmas regras de tópico. O selector une todos os domínios citados (ex: peso + plano); uma confirmação curta ("sim") herda os domínios da oferta anterior do assistente em vez de liberar todas as ferramentas.
+    - **Write scope por domínio**: cada cláusula com verbo de gravação autoriza apenas os domínios que cita (`DOMAIN_NOT_AUTHORIZED` para os demais). "Registre meu peso e me recomende um medicamento" grava a métrica, nunca um medicamento. Autorizar dieta/medicação autoriza também o registro de protocolo (recomendação).
+    - **Conflito de peso como estado explícito**: `pendingBaselineConflict` é salvo no metadata da mensagem do assistente e comparado ao peso atual do Vault (lido do banco, não do texto do contexto). É descartado quando o Vault muda ou quando uma métrica compatível é persistida no turno (`turnMutationState`). Frase sozinha não resolve o conflito.
+    - **Recomendação acompanha o plano**: todo plano nutricional persistido gera uma nova versão de recomendação (ou a primeira), despachada pelo pipeline normal de tools (guard, política de escrita e auditoria), a menos que o modelo já tenha tratado a recomendação no turno.
+    - **Recomendações manuais**: modal sem campos de macros (eram descartados pelo servidor); criação manual registrada como `USER_NOTE` / `ActorType.USER` / `USER_REPORTED`. Auditoria emitida uma única vez, pelo `RecommendationService`.
+    - **Snapshot fail-closed**: erro de leitura no `RecommendationSnapshotBuilder` aborta a transação em vez de gravar "sem medicamentos"/"sem dieta".
+    - **Gate sem doses fixas**: removidos `1.7 mg` e o fallback de semaglutida 2 mg do `EvidenceConsistencyGate`; a reconciliação usa apenas os medicamentos do Vault.
+    - **Dashboard**: gordura corporal ausente exibe "não informada" (sem ícone de tendência); lembretes vencidos exibem "Atrasado há N dias".
+    - **Suíte**: 157 testes unitários em 52 suítes, 100% de aprovação (`tests/unit/multi-domain-turn-regression.test.ts`, `tests/unit/domain-scoped-write-intent.test.ts`).
 
 ---
 
@@ -206,6 +216,8 @@ E2E_AI_MODEL="exploit"
 ---
 
 ## 7. Pendências Técnicas e Monitoramento
+
+0. **Verificação de deploy**: `/opt/healthvault` (LXC 133) não é um checkout git. Em 25/09/2026 a produção estava 3 commits atrás da `main` sem que isso fosse percebido. Todo deploy deve comparar o código implantado com o commit alvo (`diff -rq --strip-trailing-cr`) antes e depois do build.
 
 1. **Monitoramento do Tailscale no Proxmox Host (`homeLAB`)**:
    - Verificar periodicamente ou desabilitar a expiração da chave do nó Proxmox no console do Tailscale para evitar desconexões da interface de gerenciamento remoto (`100.79.12.77`).

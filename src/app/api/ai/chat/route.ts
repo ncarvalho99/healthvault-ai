@@ -8,7 +8,12 @@ import { ContextBuilder } from "@/lib/ai/context/context-builder";
 import { ToolRegistry } from "@/lib/ai/tools/registry";
 import { ToolSelector } from "@/lib/ai/tools/selector";
 import { ToolDispatcher } from "@/lib/ai/tools/dispatcher";
-import { createTurnMutationState, recordTurnMutation } from "@/lib/ai/tools/write-intent-guard";
+import {
+  createTurnMutationState,
+  recordTurnMutation,
+  computePendingBaselineConflict,
+  PendingBaselineConflict,
+} from "@/lib/ai/tools/write-intent-guard";
 import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
 import { AssistantResponseProcessor } from "@/lib/ai/response/assistant-response-processor";
 import { resolveResearchPolicy as resolveWebResearchPolicy } from "@/lib/ai/research/research-policy";
@@ -16,7 +21,7 @@ import { ResearchOrchestrator } from "@/lib/ai/research/research-orchestrator";
 import { EvidenceConsistencyGate } from "@/lib/ai/response/evidence-consistency-gate";
 import { isHealthAiModel } from "@/lib/ai/models/model-identification";
 import { logAudit } from "@/lib/audit";
-import { SenderType } from "@prisma/client";
+import { SenderType, RecommendationStatus } from "@prisma/client";
 
 const chatRequestSchema = z.object({
   conversationId: z.string().uuid("Invalid conversation ID"),
@@ -140,9 +145,26 @@ export async function POST(req: NextRequest) {
     const correlationId = "hv_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     const reasoningPolicy = resolveReasoningPolicy(activeModel);
 
+    // 3.5 Previous assistant turn (offer being confirmed + pending weight conflict) and authoritative Vault weight
+    const previousAssistantRecord = await db.message.findFirst({
+      where: { conversationId, senderType: SenderType.AI },
+      orderBy: { createdAt: "desc" },
+      select: { content: true, metadata: true },
+    });
+    const previousAssistantMessage = previousAssistantRecord?.content || undefined;
+    const previousPendingConflict =
+      ((previousAssistantRecord?.metadata as any)?.pendingBaselineConflict as PendingBaselineConflict | undefined) || null;
+    const latestBodyMetric = await db.bodyMetric.findFirst({
+      where: { userId: user!.userId },
+      orderBy: { date: "desc" },
+      select: { weightKg: true },
+    });
+    const vaultWeightKg = typeof latestBodyMetric?.weightKg === "number" ? latestBodyMetric.weightKg : null;
+
     // 4. Dynamic Tool Scoping based on message intent and agentMode
     const scopedTools = ToolSelector.selectTools({
       userMessage: content,
+      previousAssistantMessage,
       agentMode,
     });
     const openAITools = ToolRegistry.toOpenAITools(scopedTools);
@@ -323,17 +345,6 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
           break;
         }
 
-        // Extract Vault weight and previous assistant message for write intent & conflict validation
-        const vaultBlock = contextMessages.find(
-          (m) => m.role === "system" && m.content?.includes("<healthvault_data>")
-        )?.content;
-        const weightMatch =
-          vaultBlock?.match(/Recent Metrics:.*?(\d+(?:\.\d+)?)\s*kg/i) ||
-          vaultBlock?.match(/(\d+(?:\.\d+)?)\s*kg/i);
-        const vaultWeightKg = weightMatch ? parseFloat(weightMatch[1]) : null;
-        const lastAssistantMsg = [...contextMessages].reverse().find((m) => m.role === "assistant")?.content;
-        const lastUserMsg = [...contextMessages].reverse().find((m) => m.role === "user" && m.content !== content)?.content;
-
         // Order tool calls deterministically: metrics -> meds -> diet -> recommendations
         const toolDependencyPriority = (name: string) => {
           if (name.includes("metric")) return 1;
@@ -361,10 +372,9 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
             rawArguments: rawArgs,
             agentMode,
             userMessage: content,
-            previousAssistantMessage: lastAssistantMsg,
-            previousUserMessage: lastUserMsg,
-            conversationHistory: contextMessages,
+            previousAssistantMessage,
             vaultWeightKg,
+            pendingBaselineConflict: previousPendingConflict,
             turnMutationState,
           });
 
@@ -451,6 +461,50 @@ ${consistency.remediationPrompt}`,
       finalAssistantText += "\n\n*(Limite de passos operacionais do assistente atingido).*";
     }
 
+    // 6.8 Every persisted diet plan is documented as a recommendation version (protocol history).
+    // Dispatched through the regular tool pipeline so intent guard, write policy and audit still apply.
+    if (turnMutationState.dietUpdatedThisTurn && !turnMutationState.recommendationHandledThisTurn) {
+      const latestRecommendation = await db.recommendation.findFirst({
+        where: { userId: user!.userId, status: { not: RecommendationStatus.ARCHIVED } },
+        orderBy: { updatedAt: "desc" },
+        select: { id: true },
+      });
+      const autoToolName = latestRecommendation ? "healthvault_update_recommendation" : "healthvault_create_recommendation";
+      const autoArgs = latestRecommendation
+        ? { recommendation_id: latestRecommendation.id, reason: "Plano nutricional atualizado nesta conversa" }
+        : {
+            title: "Protocolo Nutricional",
+            notes:
+              "## Protocolo nutricional\n\n- Registrado automaticamente ao salvar o plano nutricional nesta conversa.\n- Metas, medicamentos e peso vigentes estão no snapshot desta versão.",
+            reason: "Plano nutricional salvo nesta conversa",
+          };
+      const autoToolCallId = `auto_rec_${correlationId}`;
+      const autoOutput = await ToolDispatcher.execute({
+        userId: user!.userId,
+        conversationId,
+        integrationId: integration.id,
+        toolCallId: autoToolCallId,
+        toolName: autoToolName,
+        rawArguments: JSON.stringify(autoArgs),
+        agentMode,
+        userMessage: content,
+        previousAssistantMessage,
+        vaultWeightKg,
+        pendingBaselineConflict: previousPendingConflict,
+        turnMutationState,
+      });
+      recordTurnMutation(turnMutationState, autoToolName, autoOutput);
+      executedToolsList.push({ toolCallId: autoToolCallId, toolName: autoToolName, output: autoOutput });
+    }
+
+    // Unresolved weight conflict carried to the next turn (cleared once the Vault matches or is updated)
+    const pendingBaselineConflict = computePendingBaselineConflict(
+      content,
+      vaultWeightKg,
+      previousPendingConflict,
+      turnMutationState
+    );
+
     // 7. Save Assistant message with clean sanitized content
     const assistantRecord = await db.message.create({
       data: {
@@ -466,6 +520,9 @@ ${consistency.remediationPrompt}`,
           iterations: iteration,
           agentMode,
           correlationId,
+          pendingBaselineConflict: pendingBaselineConflict
+            ? { reportedWeightKg: pendingBaselineConflict.reportedWeightKg, vaultWeightKg: pendingBaselineConflict.vaultWeightKg }
+            : null,
           ...finalResponseMetadata,
           ...(researchResult.status === "SUCCESS" && researchResult.sources.length > 0
             ? {

@@ -19,6 +19,8 @@ describe("health-ai — Fresh Evidence Grounding & Current-State Reconciliation"
   const origIntegrationFindFirst = db.aiIntegration.findFirst;
   const origMessageCreate = db.message.create;
   const origMessageFindMany = db.message.findMany;
+  const origMessageFindFirst = db.message.findFirst;
+  const origBodyMetricFindFirst = db.bodyMetric.findFirst;
   const origAuditCreate = db.auditLog.create;
   const origHealthSummary = HealthService.getSummaryContext;
   const origResearchExecute = ResearchOrchestrator.execute;
@@ -31,6 +33,8 @@ describe("health-ai — Fresh Evidence Grounding & Current-State Reconciliation"
     db.aiIntegration.findFirst = origIntegrationFindFirst;
     db.message.create = origMessageCreate;
     db.message.findMany = origMessageFindMany;
+    db.message.findFirst = origMessageFindFirst;
+    db.bodyMetric.findFirst = origBodyMetricFindFirst;
     db.auditLog.create = origAuditCreate;
     HealthService.getSummaryContext = origHealthSummary;
     ResearchOrchestrator.execute = origResearchExecute;
@@ -277,6 +281,8 @@ CURRENT PATIENT STATE:
       return msg;
     };
     (db.message.findMany as any) = async () => [];
+    (db.message.findFirst as any) = async () => null;
+    (db.bodyMetric.findFirst as any) = async () => null;
 
     const loggedAudits: any[] = [];
     (db.auditLog.create as any) = async ({ data }: any) => {
@@ -446,6 +452,8 @@ CURRENT PATIENT STATE:
       return msg;
     };
     (db.message.findMany as any) = async () => [];
+    (db.message.findFirst as any) = async () => null;
+    (db.bodyMetric.findFirst as any) = async () => null;
 
     const loggedAudits: any[] = [];
     (db.auditLog.create as any) = async ({ data }: any) => {

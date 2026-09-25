@@ -13,7 +13,6 @@ import {
   Scale,
   Calendar,
   ArrowRight,
-  TrendingDown,
   Activity,
   PlusCircle,
 } from "lucide-react";
@@ -73,17 +72,21 @@ export default function DashboardPage() {
   const latestMetric = data.metrics[0] || null;
   const nextReminder = data.reminders[0] || null;
 
+  // Pending reminders come oldest first, so an overdue one must be labelled as overdue, not "Hoje"
   const daysUntilReminder = nextReminder
-    ? Math.ceil((new Date(nextReminder.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    ? (new Date(nextReminder.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
     : null;
+  const daysOverdue = daysUntilReminder !== null && daysUntilReminder <= -1 ? Math.floor(-daysUntilReminder) : 0;
   const displaySchedule =
-    nextReminder !== null
-      ? daysUntilReminder! <= 0
-        ? "Hoje"
-        : daysUntilReminder === 1
-        ? "Amanhã"
-        : `Em ${daysUntilReminder} dias`
-      : "--";
+    daysUntilReminder === null
+      ? "--"
+      : daysOverdue > 0
+      ? `Atrasado há ${daysOverdue} ${daysOverdue === 1 ? "dia" : "dias"}`
+      : daysUntilReminder <= 0
+      ? "Hoje"
+      : Math.ceil(daysUntilReminder) === 1
+      ? "Amanhã"
+      : `Em ${Math.ceil(daysUntilReminder)} dias`;
   const displayReason = nextReminder ? nextReminder.title : "Nenhuma revisão agendada";
 
   return (
@@ -147,9 +150,8 @@ export default function DashboardPage() {
                   {latestMetric?.weightKg || "--"}{" "}
                   <span className="text-xs font-normal text-slate-400">kg</span>
                 </div>
-                <p className="text-[11px] text-emerald-400 flex items-center gap-1">
-                  <TrendingDown className="w-3 h-3" />
-                  Gordura: {latestMetric?.bodyFatPct ? `${latestMetric.bodyFatPct}%` : "Estável"}
+                <p className="text-[11px] text-slate-400">
+                  Gordura corporal: {latestMetric?.bodyFatPct ? `${latestMetric.bodyFatPct}%` : "não informada"}
                 </p>
               </div>
 

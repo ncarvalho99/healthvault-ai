@@ -34,22 +34,20 @@ export class RecommendationSnapshotBuilder {
   static async build(userId: string, txClient?: any): Promise<RecommendationSummarySnapshot> {
     const client = (txClient && txClient.dietPlan) ? txClient : db;
 
+    // Read failures must propagate: an empty list/null here means "no records", never "query failed",
+    // so an error aborts the transaction instead of committing a false snapshot.
+
     // 1. Current active Diet Plan & latest version
-    let activeDiet = null;
-    try {
-      activeDiet = await client.dietPlan.findFirst({
-        where: { userId, isActive: true },
-        orderBy: { updatedAt: "desc" },
-        include: {
-          versions: {
-            orderBy: { versionNumber: "desc" },
-            take: 1,
-          },
+    const activeDiet = await client.dietPlan.findFirst({
+      where: { userId, isActive: true },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        versions: {
+          orderBy: { versionNumber: "desc" },
+          take: 1,
         },
-      });
-    } catch {
-      // Fallback if DB query fails in mocking/tests
-    }
+      },
+    });
 
     const latestDietVer = activeDiet?.versions?.[0];
     const nutrition = latestDietVer
@@ -65,21 +63,16 @@ export class RecommendationSnapshotBuilder {
       : null;
 
     // 2. Current Medications (both active and recent, with latest dose/version)
-    let medications: any[] = [];
-    try {
-      medications = await client.medication.findMany({
-        where: { userId },
-        orderBy: [{ isActive: "desc" }, { updatedAt: "desc" }],
-        include: {
-          versions: {
-            orderBy: { versionNumber: "desc" },
-            take: 1,
-          },
+    const medications: any[] = await client.medication.findMany({
+      where: { userId },
+      orderBy: [{ isActive: "desc" }, { updatedAt: "desc" }],
+      include: {
+        versions: {
+          orderBy: { versionNumber: "desc" },
+          take: 1,
         },
-      });
-    } catch {
-      // Fallback
-    }
+      },
+    });
 
     const medsSnapshot = medications.map((m: any) => {
       const v = m.versions?.[0];
@@ -95,15 +88,10 @@ export class RecommendationSnapshotBuilder {
     });
 
     // 3. Latest Body Metric (weight, body fat)
-    let latestMetric = null;
-    try {
-      latestMetric = await client.bodyMetric.findFirst({
-        where: { userId },
-        orderBy: { date: "desc" },
-      });
-    } catch {
-      // Fallback
-    }
+    const latestMetric = await client.bodyMetric.findFirst({
+      where: { userId },
+      orderBy: { date: "desc" },
+    });
 
     const metricsSnapshot = latestMetric
       ? {

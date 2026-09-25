@@ -60,12 +60,11 @@ export class ToolDispatcher {
       const intentCheck = WriteIntentGuard.check({
         userMessage: context.userMessage,
         previousAssistantMessage: context.previousAssistantMessage,
-        previousUserMessage: context.previousUserMessage,
-        conversationHistory: context.conversationHistory,
         toolName,
         toolAccess: tool.access,
         toolCategory: tool.category,
         vaultWeightKg: context.vaultWeightKg,
+        pendingBaselineConflict: context.pendingBaselineConflict,
         turnMutationState: context.turnMutationState,
       });
 
@@ -80,6 +79,7 @@ export class ToolDispatcher {
               toolName,
               intent: intentCheck.intent,
               reason: intentCheck.reason,
+              authorizedDomains: intentCheck.authorizedDomains,
               conversationId,
             },
           });

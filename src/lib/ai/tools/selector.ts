@@ -1,8 +1,11 @@
 import { ToolRegistry } from "./registry";
 import { HealthVaultTool } from "./types";
+import { detectTopics, hasAnyTopic, findSaveOfferSentence, TopicFlags } from "./domain-intent";
 
 export interface ToolScopingOptions {
   userMessage?: string;
+  /** Previous assistant turn; scopes short confirmations ("sim") to what was offered */
+  previousAssistantMessage?: string;
   agentMode?: "AGENT" | "CHAT_ONLY" | "MANUAL";
   categoryHint?: string;
 }
@@ -12,7 +15,7 @@ export class ToolSelector {
    * Scopes and selects the optimal list of tools to send in the LLM completion request.
    */
   static selectTools(options: ToolScopingOptions = {}): HealthVaultTool[] {
-    const { userMessage = "", agentMode = "AGENT" } = options;
+    const { userMessage = "", previousAssistantMessage, agentMode = "AGENT" } = options;
 
     // In MANUAL mode, no tools are dispatched
     if (agentMode === "MANUAL") {
@@ -25,20 +28,24 @@ export class ToolSelector {
     // In CHAT_ONLY mode, only tools with access === "read" are allowed (read-only HealthVault access)
     const availablePool = isChatOnly ? allTools.filter((t) => t.access === "read") : allTools;
 
-    const text = userMessage.toLowerCase();
-
     // Base read-only tools always included
     const baseToolNames = ["healthvault_ping", "healthvault_get_context", "healthvault_search"];
 
-    // Keyword detection for focused scoping
-    const isDietTopic = /dieta|caloria|macro|prote[ií]na|carbo|gordura|refei[cç][aã]o|alimento|comida|nutri/i.test(text);
-    const isMedTopic = /medicamento|rem[eé]dio|dose|dosagem|mg|mcg|ozempic|semaglutid|retatrutid|tirzepatid|aplica[cç][aã]o|farm[aá]/i.test(text);
-    const isMetricTopic = /peso|pesagem|balan[cç]a|gordura corporal|bf|cintura|medida|kg/i.test(text);
-    const isSymptomTopic = /sintoma|dor|n[aá]usea|rea[cç][aã]o|efeito|azia|cabe[cç]a|fadiga|tontura/i.test(text);
-    const isLabTopic = /exame|laborat|sangue|glicemia|colesterol|hba1c|tsh|biomarcador/i.test(text);
-
-    // Saving a proposed plan/protocol touches diet and recommendation records
-    const isPlanTopic = /plano|protocolo|recomenda[cç]/i.test(text);
+    // Topics of the current message; a message with no topic of its own (e.g. "sim", "pode salvar")
+    // inherits the topics of the previous assistant offer instead of unlocking every tool
+    let topics: TopicFlags = detectTopics(userMessage);
+    if (!hasAnyTopic(topics) && previousAssistantMessage) {
+      const offer = findSaveOfferSentence(previousAssistantMessage);
+      const offerTopics = offer ? detectTopics(offer) : null;
+      topics = offerTopics && hasAnyTopic(offerTopics) ? offerTopics : detectTopics(previousAssistantMessage);
+    }
+    const isDietTopic = topics.diet;
+    const isMedTopic = topics.medication;
+    const isMetricTopic = topics.metric;
+    const isSymptomTopic = topics.symptom;
+    const isLabTopic = topics.lab;
+    const isPlanTopic = topics.plan;
+    const isReminderTopic = topics.reminder;
 
     // Union of every detected domain, so multi-domain requests (e.g. "atualize meu peso e salve o plano")
     // receive all the tools they need while unrelated domains stay out of scope
@@ -61,6 +68,9 @@ export class ToolSelector {
     }
     if (isLabTopic) {
       categories.add("labs");
+    }
+    if (isReminderTopic) {
+      categories.add("reminders");
     }
 
     if (categories.size > 0) {

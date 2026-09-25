@@ -1,4 +1,4 @@
-import type { TurnMutationState } from "./write-intent-guard";
+import type { TurnMutationState, PendingBaselineConflict } from "./write-intent-guard";
 import { z, ZodSchema } from "zod";
 
 export type ToolCategory =
@@ -30,9 +30,8 @@ export interface ToolExecutionContext {
   agentMode?: "AGENT" | "CHAT_ONLY" | "MANUAL";
   userMessage?: string;
   previousAssistantMessage?: string;
-  previousUserMessage?: string;
-  conversationHistory?: Array<{ role: string; content?: string | null }>;
   vaultWeightKg?: number | null;
+  pendingBaselineConflict?: PendingBaselineConflict | null;
   turnMutationState?: TurnMutationState;
 }
 

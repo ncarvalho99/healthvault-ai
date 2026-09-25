@@ -94,7 +94,7 @@ export class EvidenceConsistencyGate {
                 `(?:exclusive|exclusiv[ao]|pertence|apenas|only)[^.]*?${normalizedD}|${normalizedD}[^.]*?(?:exclusive|exclusiv[ao]|pertence|apenas|only)`,
                 "i"
               );
-              if (wegovyDosePattern.test(sourcesText) && (exclusivePattern.test(sourcesText) || /1[.,]7\s*mg/i.test(d))) {
+              if (wegovyDosePattern.test(sourcesText) && exclusivePattern.test(sourcesText)) {
                 violations.push(
                   `CROSS_PRODUCT_DOSING_CONTAMINATION: Assistant attributed dose ${d} to Ozempic in contradiction to source evidence distinguishing Wegovy and Ozempic.`
                 );
@@ -134,7 +134,6 @@ export class EvidenceConsistencyGate {
 
       if (!/none registered|no active medications/i.test(medsSummary)) {
         const doseMatches = medsSummary.matchAll(/([A-Za-zÀ-ÿ\s]+)\s*\(\s*([^,]+?)(?:,\s*[^,]+?)*,\s*v?\d+\s*\)/g);
-        let flagged = false;
         for (const match of doseMatches) {
           const medName = match[1].trim().toLowerCase();
           const dose = match[2].trim().toLowerCase();
@@ -150,21 +149,8 @@ export class EvidenceConsistencyGate {
             violations.push(
               `STALE_PROSE_VS_VAULT: Assistant referred to a dose change as 'pending' based on past conversation history, but HealthVault structured data shows '${match[1].trim()} ${match[2].trim()}' is already active.`
             );
-            flagged = true;
             break;
           }
-        }
-
-        if (
-          !flagged &&
-          /semaglutid[ae][^;]*2(\.0)?\s*mg/i.test(vaultContextBlock) &&
-          /\b(dose\s+de\s+2\s*mg\s+(est[aá]\s+pendente|aguarda\s+aprova[cç][aã]o|ainda\s+n[aã]o\s+foi\s+aprovada)|proposta\s+de\s+2\s*mg\s+pendente)\b/i.test(
-            lowerText
-          )
-        ) {
-          violations.push(
-            "STALE_PROSE_VS_VAULT: Assistant referred to a dose change as 'pending' based on past conversation history, but HealthVault structured data shows the dose is already active."
-          );
         }
       }
 

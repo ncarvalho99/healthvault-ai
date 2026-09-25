@@ -2,9 +2,19 @@
  * WriteIntentGuard
  *
  * Deterministic server-side guard that distinguishes advisory/generative requests
- * from persistent mutation intent, enforcing confirmation binding and persisting
- * baseline conflicts across dialogue turns.
+ * from persistent mutation intent. Authorization is scoped per domain: a write
+ * instruction only authorizes the domains it (or the confirmed offer) names.
+ * Weight baseline conflicts are carried as explicit state, never re-derived from history.
  */
+
+import {
+  WriteDomain,
+  mentionedWriteDomains,
+  offeredWriteDomains,
+  findSaveOfferSentence,
+  toolWriteDomain,
+  parseReportedWeightKg,
+} from "./domain-intent";
 
 /**
  * Mutations already persisted earlier in the current chat turn.
@@ -13,48 +23,116 @@
 export interface TurnMutationState {
   weightUpdatedThisTurn: boolean;
   updatedWeightKg: number | null;
+  dietUpdatedThisTurn: boolean;
+  recommendationHandledThisTurn: boolean;
 }
 
 export function createTurnMutationState(): TurnMutationState {
-  return { weightUpdatedThisTurn: false, updatedWeightKg: null };
+  return {
+    weightUpdatedThisTurn: false,
+    updatedWeightKg: null,
+    dietUpdatedThisTurn: false,
+    recommendationHandledThisTurn: false,
+  };
 }
 
 /**
- * Records a dispatched tool result into the turn state. A body metric only counts
- * when it was actually persisted (not failed, not pending manual approval).
+ * Records a dispatched tool result into the turn state. Metric and diet writes only count
+ * when actually persisted (not failed, not pending manual approval). A recommendation counts
+ * as handled once proposed, so no second version is generated for the same turn.
  */
 export function recordTurnMutation(
   state: TurnMutationState,
   toolName: string,
   result: { success: boolean; requires_approval?: boolean; data?: any }
 ): void {
-  if (
-    toolName === "healthvault_add_body_metric" &&
-    result.success &&
-    !result.requires_approval &&
-    typeof result.data?.weightKg === "number"
-  ) {
+  if (!result.success) return;
+  const persisted = !result.requires_approval;
+
+  if (toolName === "healthvault_add_body_metric" && persisted && typeof result.data?.weightKg === "number") {
     state.weightUpdatedThisTurn = true;
     state.updatedWeightKg = result.data.weightKg;
   }
+  if ((toolName === "healthvault_create_diet" || toolName === "healthvault_update_diet") && persisted) {
+    state.dietUpdatedThisTurn = true;
+  }
+  if (toolName === "healthvault_create_recommendation" || toolName === "healthvault_update_recommendation") {
+    state.recommendationHandledThisTurn = true;
+  }
+}
+
+/**
+ * Unresolved difference between a weight the user reported and the Vault, carried across turns
+ * on the assistant message metadata. `vaultWeightKg` is the Vault value it was measured against:
+ * if the Vault changes afterwards, the conflict is superseded.
+ */
+export interface PendingBaselineConflict {
+  reportedWeightKg: number;
+  vaultWeightKg: number;
+}
+
+const MATERIAL_WEIGHT_DIFF_KG = 4.0;
+
+/**
+ * Weight the user is currently asserting: the current message, or a still-valid pending conflict.
+ */
+export function resolveReportedWeight(
+  userMessage: string | undefined,
+  vaultWeightKg: number | null | undefined,
+  pending: PendingBaselineConflict | null | undefined
+): number | null {
+  const fromMessage = parseReportedWeightKg(userMessage);
+  if (fromMessage !== null) return fromMessage;
+  if (pending && typeof vaultWeightKg === "number" && Math.abs(pending.vaultWeightKg - vaultWeightKg) < 0.05) {
+    return pending.reportedWeightKg;
+  }
+  return null;
+}
+
+/**
+ * Conflict to carry into the next turn, or null when there is none or it was resolved this turn.
+ */
+export function computePendingBaselineConflict(
+  userMessage: string | undefined,
+  vaultWeightKg: number | null | undefined,
+  previousPending: PendingBaselineConflict | null | undefined,
+  turnState: TurnMutationState
+): PendingBaselineConflict | null {
+  if (typeof vaultWeightKg !== "number" || vaultWeightKg <= 0) return null;
+  const reported = resolveReportedWeight(userMessage, vaultWeightKg, previousPending);
+  if (reported === null || Math.abs(reported - vaultWeightKg) < MATERIAL_WEIGHT_DIFF_KG) return null;
+  if (
+    turnState.weightUpdatedThisTurn &&
+    typeof turnState.updatedWeightKg === "number" &&
+    Math.abs(turnState.updatedWeightKg - reported) < 0.1
+  ) {
+    return null;
+  }
+  return { reportedWeightKg: reported, vaultWeightKg };
 }
 
 export interface WriteIntentCheckOptions {
   userMessage?: string;
   previousAssistantMessage?: string;
-  previousUserMessage?: string;
-  conversationHistory?: Array<{ role: string; content?: string | null }>;
   toolName: string;
   toolAccess?: string;
   toolCategory?: string;
   vaultWeightKg?: number | null;
+  pendingBaselineConflict?: PendingBaselineConflict | null;
   turnMutationState?: TurnMutationState;
 }
 
 export interface WriteIntentCheckResult {
   allowed: boolean;
-  intent: "EXPLICIT_MUTATION" | "CONFIRMATION" | "ADVISORY" | "BASELINE_CONFLICT" | "NO_WRITE_INTENT";
+  intent:
+    | "EXPLICIT_MUTATION"
+    | "CONFIRMATION"
+    | "ADVISORY"
+    | "BASELINE_CONFLICT"
+    | "DOMAIN_NOT_AUTHORIZED"
+    | "NO_WRITE_INTENT";
   reason?: string;
+  authorizedDomains?: WriteDomain[];
 }
 
 const ADVISORY_PATTERNS = [
@@ -63,90 +141,92 @@ const ADVISORY_PATTERNS = [
 ];
 
 const EXPLICIT_MUTATION_PATTERNS = [
-  /\b(registre|registrar|grave|gravar|salve|salvar|adicione|adicionar|atualize|atualizar|altere|alterar|modifique|modificar|mude|mudar|troque|trocar|pare|parar|suspenda|suspender|descontinue|descontinuar|interrompa|interromper|aplique|aplicar|cadastre|cadastrar|defina|definir|coloque|colocar|insira|inserir|delete|deletar|exclua|excluir|remova|remover|anote|anotar|guarde|guardar)\b/i,
+  /\b(registre|registrar|grave|gravar|salve|salva|salvar|adicione|adicionar|atualize|atualizar|altere|alterar|modifique|modificar|mude|mudar|troque|trocar|pare|parar|suspenda|suspender|descontinue|descontinuar|interrompa|interromper|aplique|aplicar|cadastre|cadastrar|defina|definir|coloque|colocar|insira|inserir|delete|deletar|exclua|excluir|remova|remover|anote|anotar|guarde|guardar)\b/i,
   /\b(save|record|update|change|stop|discontinue|apply|set|add|register|delete|remove|modify)\b/i,
   /\b(minha\s+nova\s+dieta\s+[eé]|meu\s+novo\s+peso\s+[eé]|nova\s+dose\s+[eé]|quero\s+salvar|pode\s+salvar|pode\s+gravar|pode\s+registrar|pode\s+atualizar|por\s+favor\s+salve)\b/i,
-  /\b(sim,\s*(salve|grave|registre|atualize|pode\s+salvar|aplique))\b/i,
 ];
 
 const GENERIC_AFFIRMATIVE_PATTERNS = [
   /^(sim|ok|pode|confirmo|confirmar|quero|com\s+certeza|fa[cç]a\s+isso|yes|confirm|go\s+ahead)[\s.!,]*$/i,
 ];
 
-const PREVIOUS_ASSISTANT_OFFER_SAVE_PATTERNS = [
-  /(?:quer\s+que\s+eu|deseja\s+que\s+eu|posso|gostaria\s+que\s+eu)\s+(?:salve|salvar|registre|registrar|grave|gravar|aplique|aplicar|atualize|atualizar)/i,
-  /(?:salvar|gravar|registrar|aplicar)\s+(?:este|esse|o)\s+plano/i,
-  /(?:would\s+you\s+like\s+me\s+to|should\s+I)\s+(?:save|record|apply|register)/i,
-];
+// Clause boundaries: sentence ends, ", " (not decimal commas), and connectives.
+const CLAUSE_SPLIT = /[;!?\n]+|\.(?=\s|$)|,(?=\s)|\s+e\s+|\s+mas\s+|\s+depois\s+|\s+and\s+/i;
 
-function findDialogueReportedWeight(
-  userMessage: string,
-  previousUserMessage?: string,
-  previousAssistantMessage?: string,
-  history?: Array<{ role: string; content?: string | null }>
-): number | null {
-  // 1. Current user message
-  const matchCurrent =
-    userMessage.match(/\b(?:estou\s+com|peso\s+(?:de\s+)?|pesando\s+|com\s+)(\d+(?:[.,]\d+)?)\s*kg\b/i) ||
-    userMessage.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/i);
-  if (matchCurrent) {
-    const val = parseFloat(matchCurrent[1].replace(",", "."));
-    if (!isNaN(val)) return val;
+/**
+ * A protocol record accompanies the plan it documents: authorizing a diet or medication
+ * change also authorizes recording the corresponding recommendation version.
+ */
+function withProtocolRecord(domains: Set<WriteDomain>): Set<WriteDomain> {
+  if (domains.has("nutrition") || domains.has("medications")) domains.add("recommendations");
+  return domains;
+}
+
+interface WriteScope {
+  mode: "MUTATION" | "CONFIRMATION" | "ADVISORY" | "NONE";
+  domains: Set<WriteDomain>;
+}
+
+/**
+ * Splits the message into clauses and collects the domains named by clauses that carry a
+ * write verb. A clause without its own verb inherits the previous clause's mode
+ * ("atualize minha dieta e medicação"). A write clause naming no domain ("sim, salve")
+ * binds to what the previous assistant turn offered.
+ */
+export function resolveWriteScope(userMessage: string, previousAssistantMessage?: string): WriteScope {
+  const trimmed = userMessage.trim();
+
+  if (GENERIC_AFFIRMATIVE_PATTERNS.some((p) => p.test(trimmed))) {
+    if (!findSaveOfferSentence(previousAssistantMessage)) return { mode: "NONE", domains: new Set() };
+    return { mode: "CONFIRMATION", domains: withProtocolRecord(offeredWriteDomains(previousAssistantMessage)) };
   }
 
-  // 2. Previous user message
-  if (previousUserMessage) {
-    const matchPrev =
-      previousUserMessage.match(/\b(?:estou\s+com|peso\s+(?:de\s+)?|pesando\s+|com\s+)(\d+(?:[.,]\d+)?)\s*kg\b/i) ||
-      previousUserMessage.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/i);
-    if (matchPrev) {
-      const val = parseFloat(matchPrev[1].replace(",", "."));
-      if (!isNaN(val)) return val;
+  const domains = new Set<WriteDomain>();
+  let lastMode: "MUTATION" | "ADVISORY" | null = null;
+  let sawMutation = false;
+  let sawAdvisory = false;
+  let domainlessMutation = false;
+
+  for (const clause of trimmed.split(CLAUSE_SPLIT)) {
+    if (!clause || !clause.trim()) continue;
+    const isMutation = EXPLICIT_MUTATION_PATTERNS.some((p) => p.test(clause));
+    const isAdvisory = !isMutation && ADVISORY_PATTERNS.some((p) => p.test(clause));
+    const mode: "MUTATION" | "ADVISORY" | null = isMutation ? "MUTATION" : isAdvisory ? "ADVISORY" : lastMode;
+    if (isMutation || isAdvisory) lastMode = mode;
+    if (isMutation) sawMutation = true;
+    if (isAdvisory) sawAdvisory = true;
+
+    if (mode === "MUTATION") {
+      const clauseDomains = mentionedWriteDomains(clause);
+      if (clauseDomains.size === 0 && isMutation) domainlessMutation = true;
+      clauseDomains.forEach((d) => domains.add(d));
     }
   }
 
-  // 3. Previous assistant message referencing reported weight
-  if (previousAssistantMessage) {
-    const matchAssist = previousAssistantMessage.match(/\b(?:mencionou|informou|disse)\s+(\d+(?:[.,]\d+)?)\s*kg/i);
-    if (matchAssist) {
-      const val = parseFloat(matchAssist[1].replace(",", "."));
-      if (!isNaN(val)) return val;
-    }
+  if (domainlessMutation) {
+    offeredWriteDomains(previousAssistantMessage).forEach((d) => domains.add(d));
   }
 
-  // 4. History
-  if (history && history.length > 0) {
-    for (let i = history.length - 1; i >= 0; i--) {
-      const msg = history[i];
-      if (msg.role === "user" && msg.content) {
-        const m =
-          msg.content.match(/\b(?:estou\s+com|peso\s+(?:de\s+)?|pesando\s+|com\s+)(\d+(?:[.,]\d+)?)\s*kg\b/i) ||
-          msg.content.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/i);
-        if (m) {
-          const val = parseFloat(m[1].replace(",", "."));
-          if (!isNaN(val)) return val;
-        }
-      }
-    }
-  }
-
-  return null;
+  if (sawMutation) return { mode: "MUTATION", domains: withProtocolRecord(domains) };
+  if (sawAdvisory) return { mode: "ADVISORY", domains: new Set() };
+  return { mode: "NONE", domains: new Set() };
 }
 
 export class WriteIntentGuard {
   /**
    * Determines whether an incoming tool execution is authorized by the user's intent.
-   * Read tools are always allowed. Write tools require explicit mutation intent or valid confirmation.
+   * Read tools are always allowed. Write tools require explicit mutation intent or a valid
+   * confirmation that covers the tool's domain.
    */
   static check(options: WriteIntentCheckOptions): WriteIntentCheckResult {
     const {
       userMessage,
       previousAssistantMessage = "",
-      previousUserMessage,
-      conversationHistory,
       toolName,
       toolAccess,
+      toolCategory,
       vaultWeightKg,
+      pendingBaselineConflict,
       turnMutationState,
     } = options;
 
@@ -169,23 +249,17 @@ export class WriteIntentGuard {
       };
     }
 
-    // 2. Check for Material Baseline Conflict in Weight across turns
-    // If user self-reported a weight that materially differs from Vault (> 4 kg), and tool is diet/recommendation write:
+    // 2. Material weight baseline conflict blocks diet/recommendation writes until the weight is persisted
     if (
       typeof vaultWeightKg === "number" &&
       vaultWeightKg > 0 &&
       (toolName.includes("diet") || toolName.includes("recommendation"))
     ) {
-      const reportedWeight = findDialogueReportedWeight(
-        trimmedUser,
-        previousUserMessage,
-        previousAssistantMessage,
-        conversationHistory
-      );
+      const reportedWeight = resolveReportedWeight(trimmedUser, vaultWeightKg, pendingBaselineConflict);
 
-      if (reportedWeight !== null && Math.abs(reportedWeight - vaultWeightKg) >= 4.0) {
-        // The conflict is only resolved by real state: a body metric persisted earlier in this
-        // same turn whose weight matches the reported weight. Wording alone ("registre meu peso") is not proof.
+      if (reportedWeight !== null && Math.abs(reportedWeight - vaultWeightKg) >= MATERIAL_WEIGHT_DIFF_KG) {
+        // Resolved only by real state: a body metric persisted earlier in this same turn
+        // whose weight matches the reported weight. Wording alone ("registre meu peso") is not proof.
         const persistedThisTurn =
           turnMutationState?.weightUpdatedThisTurn === true &&
           typeof turnMutationState.updatedWeightKg === "number" &&
@@ -201,35 +275,36 @@ export class WriteIntentGuard {
       }
     }
 
-    // 3. Check for Generic Affirmative Confirmation (sim, ok, pode, confirmo)
-    const isGenericAffirmative = GENERIC_AFFIRMATIVE_PATTERNS.some((p) => p.test(trimmedUser));
-    const previousOfferedSave = PREVIOUS_ASSISTANT_OFFER_SAVE_PATTERNS.some((p) =>
-      p.test(previousAssistantMessage)
-    );
+    // 3. Domain-scoped write authorization
+    const scope = resolveWriteScope(trimmedUser, previousAssistantMessage);
+    const toolDomain = toolWriteDomain(toolName, toolCategory);
+    const authorizedDomains = Array.from(scope.domains);
 
-    if (isGenericAffirmative) {
-      if (previousOfferedSave) {
-        return { allowed: true, intent: "CONFIRMATION" };
-      } else {
+    if (scope.mode === "MUTATION" || scope.mode === "CONFIRMATION") {
+      if (toolDomain && scope.domains.has(toolDomain)) {
         return {
-          allowed: false,
-          intent: "NO_WRITE_INTENT",
-          reason: `WRITE_INTENT_REQUIRED: Resposta afirmativa genérica ('${trimmedUser}') sem oferta prévia de persistência no HealthVault não autoriza gravação persistente.`,
+          allowed: true,
+          intent: scope.mode === "CONFIRMATION" ? "CONFIRMATION" : "EXPLICIT_MUTATION",
+          authorizedDomains,
         };
       }
+      return {
+        allowed: false,
+        intent: "DOMAIN_NOT_AUTHORIZED",
+        authorizedDomains,
+        reason: `WRITE_INTENT_REQUIRED: O usuário autorizou gravação apenas em: ${authorizedDomains.join(", ") || "nenhum domínio identificado"}. A ferramenta ${toolName} (${toolDomain || "domínio desconhecido"}) não foi autorizada nesta mensagem. Apresente essa parte como sugestão e pergunte explicitamente antes de gravá-la.`,
+      };
     }
 
-    // 4. Check explicit mutation intent (salve, registre, atualize, mude, pare, etc.)
-    const hasExplicitMutation = EXPLICIT_MUTATION_PATTERNS.some((p) => p.test(trimmedUser));
-    const hasAdvisory = ADVISORY_PATTERNS.some((p) => p.test(trimmedUser));
-
-    // If explicit mutation directive is present:
-    if (hasExplicitMutation) {
-      return { allowed: true, intent: "EXPLICIT_MUTATION" };
+    if (GENERIC_AFFIRMATIVE_PATTERNS.some((p) => p.test(trimmedUser))) {
+      return {
+        allowed: false,
+        intent: "NO_WRITE_INTENT",
+        reason: `WRITE_INTENT_REQUIRED: Resposta afirmativa genérica ('${trimmedUser}') sem oferta prévia de persistência no HealthVault não autoriza gravação persistente.`,
+      };
     }
 
-    // If user request is advisory/generative (e.g. "monte uma dieta...", "recomende opções..."):
-    if (hasAdvisory) {
+    if (scope.mode === "ADVISORY") {
       return {
         allowed: false,
         intent: "ADVISORY",
@@ -238,7 +313,6 @@ export class WriteIntentGuard {
       };
     }
 
-    // Default: write operations require clear intent
     return {
       allowed: false,
       intent: "NO_WRITE_INTENT",
