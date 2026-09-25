@@ -167,6 +167,32 @@ export class EvidenceConsistencyGate {
           );
         }
       }
+
+      // 2.3 Stale Active Medication Claim (Generic active vs discontinued reconciliation)
+      const isMedsEmpty = /none registered|no active medications/i.test(medsSummary);
+      if (isMedsEmpty) {
+        const claimsActiveMedication =
+          /\b(j[aá]\s+(?:em\s+uso|ativa|ativo|est[aá]\s+ativo)|continua\b|continue\s+com|mantenha\s+o|mant[eé]m|dose\s+atual\s+(?:de\s+)?\d+)\b/i.test(
+            lowerText
+          ) ||
+          /\b(medicamento\s+atual|seu\s+medicamento\s+ativo)\b/i.test(lowerText);
+
+        if (claimsActiveMedication) {
+          violations.push(
+            "STALE_ACTIVE_MEDICATION_CLAIM: Assistant claimed a medication is currently active or in use, but HealthVault structured data confirms there are NO active medications registered."
+          );
+        }
+      } else {
+        const claimsNoMeds =
+          /\b(nenhum\s+medicamento\s+ativo|n[aã]o\s+possui\s+medicamentos|n[aã]o\s+h[aá]\s+medicamentos\s+cadastrados|no\s+active\s+medications)\b/i.test(
+            lowerText
+          );
+        if (claimsNoMeds) {
+          violations.push(
+            "STALE_ACTIVE_MEDICATION_CLAIM: Assistant asserted that no active medications exist, contradicting active medications registered in HealthVault."
+          );
+        }
+      }
     }
 
     const isValid = violations.length === 0;
@@ -180,7 +206,8 @@ Guidelines:
 1. Synthesize directly from <web_research> and <healthvault_data>.
 2. Do not refer to past turns ("já cobrimos", "conforme dito acima", "veja acima").
 3. Current structured HealthVault data is authoritative over conversational history.
-4. For clinical and regulatory claims, follow current <web_research> evidence and distinguish products, indications, and jurisdictions accurately without mixing distinct products.`;
+4. If no active medications are registered in HealthVault, state that plainly; do not claim old or discontinued medications are active.
+5. For clinical and regulatory claims, follow current <web_research> evidence and distinguish products, indications, and jurisdictions accurately without mixing distinct products.`;
     }
 
     return {

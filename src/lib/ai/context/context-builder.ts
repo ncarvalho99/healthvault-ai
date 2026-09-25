@@ -60,7 +60,14 @@ For current dosing, approval, regulatory, labeling or trial claims:
 current <web_research> is authoritative.
 
 Do not use runtime hardcoded dose ceilings or regulatory claims as permanent medical truth.
-Never make mutually contradictory statements about drug approvals.`;
+Never make mutually contradictory statements about drug approvals.
+4. Advisory intent vs persistent mutation & current-turn self-reports:
+- Advice is not persistence: Prompts asking "monte uma dieta", "recomende opções", "qual protocolo você sugere" are advisory/generative requests. Do NOT call write tools unless the user explicitly requests recording/saving ("salve", "registre", "atualize no vault") or confirms a save offer.
+- Distinguish persisted Vault state from current-turn self-report: If the user provides a newer measurement (e.g. self-reported weight) that materially differs from the Vault:
+  a) Acknowledge the difference plainly (e.g. "Você informou 98 kg agora; o último peso salvo no Vault é 85.7 kg").
+  b) For advisory proposals, calculate using the newly stated value as a temporary assumption.
+  c) Do NOT execute persistent database writes based on conflicting unverified data without explicit confirmation.
+- Historical recommendation notes are NOT active medication state: Current active medications are determined strictly by <healthvault_data> Active Medications. If the list is empty, state plainly that no medication is active.`;
       }
 
       return prompt;
@@ -117,7 +124,14 @@ For current dosing, approval, regulatory, labeling or trial claims:
 current <web_research> is authoritative.
 
 Do not use runtime hardcoded dose ceilings or regulatory claims as permanent medical truth.
-Never make mutually contradictory statements about drug approvals.`;
+Never make mutually contradictory statements about drug approvals.
+4. Advisory intent vs persistent mutation & current-turn self-reports:
+- Advice is not persistence: Prompts asking "monte uma dieta", "recomende opções", "qual protocolo você sugere" are advisory/generative requests. Do NOT call write tools unless the user explicitly requests recording/saving ("salve", "registre", "atualize no vault") or confirms a save offer.
+- Distinguish persisted Vault state from current-turn self-report: If the user provides a newer measurement (e.g. self-reported weight) that materially differs from the Vault:
+  a) Acknowledge the difference plainly (e.g. "Você informou 98 kg agora; o último peso salvo no Vault é 85.7 kg").
+  b) For advisory proposals, calculate using the newly stated value as a temporary assumption.
+  c) Do NOT execute persistent database writes based on conflicting unverified data without explicit confirmation.
+- Historical recommendation notes are NOT active medication state: Current active medications are determined strictly by <healthvault_data> Active Medications. If the list is empty, state plainly that no medication is active.`;
     }
 
     return basePrompt;

@@ -262,6 +262,10 @@ export function MessageToolExecutions({
         }
 
         /* Error state */
+        if (out.error?.code === "WRITE_INTENT_REQUIRED" || out.error?.code === "BASELINE_CONFLICT") {
+          return null; // Suppress from UI — advisory request was handled conversationally, not a failed mutation
+        }
+
         return (
           <div
             key={idx}

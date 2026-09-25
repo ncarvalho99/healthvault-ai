@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { Header } from "@/components/layout/Header";
 import { SafetyBadge } from "@/components/ui/SafetyBadge";
+import { ClinicalMarkdown } from "@/components/ui/ClinicalMarkdown";
 import {
   Pill,
   Utensils,
@@ -102,11 +103,19 @@ export default function DashboardPage() {
                   <Utensils className="w-4 h-4 text-amber-400" />
                 </div>
                 <div className="text-2xl font-bold text-amber-300 font-mono">
-                  {latestDietVer?.targetCalories || 2100}{" "}
-                  <span className="text-xs font-normal text-slate-400">kcal</span>
+                  {latestDietVer?.targetCalories ? (
+                    <>
+                      {latestDietVer.targetCalories}{" "}
+                      <span className="text-xs font-normal text-slate-400">kcal</span>
+                    </>
+                  ) : (
+                    "--"
+                  )}
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  Proteína: {latestDietVer?.targetProteinG || 190}g • v{activeDiet?.currentVersion || 1}
+                  {latestDietVer
+                    ? `Proteína: ${latestDietVer.targetProteinG}g • v${activeDiet?.currentVersion || 1}`
+                    : "Nenhuma dieta configurada"}
                 </p>
               </div>
 
@@ -133,9 +142,11 @@ export default function DashboardPage() {
                   <Calendar className="w-4 h-4 text-purple-400" />
                 </div>
                 <div className="text-lg font-bold text-slate-100">
-                  Em 14 dias
+                  {data.medications.length > 0 ? "Em 14 dias" : "--"}
                 </div>
-                <p className="text-[11px] text-slate-400">Titulação de dosagem</p>
+                <p className="text-[11px] text-slate-400">
+                  {data.medications.length > 0 ? "Revisão clínica" : "Nenhuma revisão agendada"}
+                </p>
               </div>
             </div>
 
@@ -171,7 +182,9 @@ export default function DashboardPage() {
                           </span>
                         </div>
                         {latestRec.notes && (
-                          <p className="text-slate-300 italic">{latestRec.notes}</p>
+                          <div className="max-h-48 overflow-y-auto pr-1">
+                            <ClinicalMarkdown content={latestRec.notes} preview maxPreviewChars={280} />
+                          </div>
                         )}
                       </div>
 
@@ -183,7 +196,7 @@ export default function DashboardPage() {
                           href={`/recommendations`}
                           className="inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
                         >
-                          <span>Histórico Completo & Diffs</span>
+                          <span>Ver protocolo completo & Diffs</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </Link>
                       </div>

@@ -320,8 +320,30 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
           break;
         }
 
+        // Extract Vault weight and previous assistant message for write intent & conflict validation
+        const vaultBlock = contextMessages.find(
+          (m) => m.role === "system" && m.content?.includes("<healthvault_data>")
+        )?.content;
+        const weightMatch =
+          vaultBlock?.match(/Recent Metrics:.*?(\d+(?:\.\d+)?)\s*kg/i) ||
+          vaultBlock?.match(/(\d+(?:\.\d+)?)\s*kg/i);
+        const vaultWeightKg = weightMatch ? parseFloat(weightMatch[1]) : null;
+        const lastAssistantMsg = [...contextMessages].reverse().find((m) => m.role === "assistant")?.content;
+
+        // Order tool calls deterministically: metrics -> meds -> diet -> recommendations
+        const toolDependencyPriority = (name: string) => {
+          if (name.includes("metric")) return 1;
+          if (name.includes("medication")) return 2;
+          if (name.includes("diet")) return 3;
+          if (name.includes("recommendation")) return 4;
+          return 5;
+        };
+        const orderedToolCalls = [...assistantMsg.tool_calls].sort(
+          (a, b) => toolDependencyPriority(a.function?.name || "") - toolDependencyPriority(b.function?.name || "")
+        );
+
         // Execute tool calls
-        for (const tc of assistantMsg.tool_calls) {
+        for (const tc of orderedToolCalls) {
           const toolCallId = tc.id;
           const toolName = tc.function?.name;
           const rawArgs = tc.function?.arguments;
@@ -334,6 +356,9 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
             toolName,
             rawArguments: rawArgs,
             agentMode,
+            userMessage: content,
+            previousAssistantMessage: lastAssistantMsg,
+            vaultWeightKg,
           });
 
           executedToolsList.push({

@@ -27,6 +27,9 @@ export interface ToolExecutionContext {
   rawArguments: string | Record<string, any>;
   informationOrigin?: string;
   agentMode?: "AGENT" | "CHAT_ONLY" | "MANUAL";
+  userMessage?: string;
+  previousAssistantMessage?: string;
+  vaultWeightKg?: number | null;
 }
 
 export interface ToolExecutionResult {

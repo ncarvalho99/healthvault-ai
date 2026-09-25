@@ -1,5 +1,6 @@
 import { db } from "../db";
 import { logAudit } from "../audit";
+import { RecommendationSnapshotBuilder } from "./recommendation-snapshot-builder";
 import { RecommendationStatus, SourceType, ActorType } from "@prisma/client";
 
 export interface CreateRecommendationInput {
@@ -97,12 +98,17 @@ export class RecommendationService {
         },
       });
 
+      const finalSnapshot =
+        input.summarySnapshot && Object.keys(input.summarySnapshot).length > 0
+          ? input.summarySnapshot
+          : await RecommendationSnapshotBuilder.build(userId, tx);
+
       await tx.recommendationVersion.create({
         data: {
           recommendationId: rec.id,
           versionNumber: 1,
           status,
-          summarySnapshot: input.summarySnapshot || {},
+          summarySnapshot: finalSnapshot,
           changeReason: input.changeReason || "Protocolo inicial",
           conversationId: input.conversationId,
           actorType: input.actorType || ActorType.AI,
@@ -146,12 +152,17 @@ export class RecommendationService {
     const finalStatus = input.status || existing.status;
 
     const runInTx = async (tx: any) => {
+      const finalSnapshot =
+        input.summarySnapshot && Object.keys(input.summarySnapshot).length > 0
+          ? input.summarySnapshot
+          : await RecommendationSnapshotBuilder.build(userId, tx);
+
       await tx.recommendationVersion.create({
         data: {
           recommendationId: existing.id,
           versionNumber: nextVersionNumber,
           status: finalStatus,
-          summarySnapshot: input.summarySnapshot,
+          summarySnapshot: finalSnapshot,
           changeReason: input.changeReason,
           conversationId: input.conversationId || existing.conversationId,
           actorType: input.actorType || ActorType.AI,

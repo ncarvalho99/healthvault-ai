@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { SafetyBadge } from "@/components/ui/SafetyBadge";
+import { ClinicalMarkdown } from "@/components/ui/ClinicalMarkdown";
 import { VersionDiffModal } from "@/components/recommendations/VersionDiffModal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Toast } from "@/components/ui/Toast";
@@ -29,10 +30,10 @@ export default function RecommendationsPage() {
   // New Recommendation Form State
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
-  const [calories, setCalories] = useState(2100);
-  const [protein, setProtein] = useState(190);
-  const [carbs, setCarbs] = useState(180);
-  const [fat, setFat] = useState(70);
+  const [calories, setCalories] = useState<number | string>("");
+  const [protein, setProtein] = useState<number | string>("");
+  const [carbs, setCarbs] = useState<number | string>("");
+  const [fat, setFat] = useState<number | string>("");
 
   const showToast = (message: string, type: "success" | "error" | "info" = "success") => {
     setToast({ message, type });
@@ -241,39 +242,58 @@ export default function RecommendationsPage() {
                   </div>
 
                   {rec.notes && (
-                    <p className="text-xs text-slate-300 italic bg-slate-950/50 p-2.5 rounded-lg border border-slate-800/60">
-                      {rec.notes}
-                    </p>
+                    <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/70">
+                      <ClinicalMarkdown content={rec.notes} />
+                    </div>
                   )}
 
-                  {/* Quick Summary of Active Meds & Nutrition */}
+                  {/* Quick Summary of Active Meds & Nutrition from Version Snapshot */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                    {/* Active Meds in this rec */}
+                    {/* Meds snapshot */}
                     <div className="p-3 rounded-lg bg-slate-950/50 border border-slate-800">
-                      <span className="text-slate-400 font-semibold block mb-1">
-                        Medicamentos Associados ({rec.medications?.length || 0}):
+                      <span className="text-slate-300 font-semibold block">
+                        Medicamentos da v{latestVer?.versionNumber || rec.currentVersion} ({snapshot.medications?.length ?? rec.medications?.length ?? 0}):
                       </span>
-                      {rec.medications?.length > 0 ? (
+                      <span className="text-[10px] text-slate-500 block mb-1.5">
+                        Capturado nesta versão
+                      </span>
+                      {snapshot.medications && snapshot.medications.length > 0 ? (
+                        <div className="space-y-1">
+                          {snapshot.medications.map((m: any) => (
+                            <div key={m.id} className="flex justify-between text-slate-200">
+                              <span className="flex items-center gap-1.5">
+                                <span className={`w-1.5 h-1.5 rounded-full ${m.active ? "bg-emerald-400" : "bg-slate-600"}`} />
+                                {m.name}
+                              </span>
+                              <span className="font-mono text-emerald-400 font-bold">
+                                {m.active ? (m.dose ? `${m.dose} (${m.frequency || "1x/dia"})` : "Ativo") : "Descontinuado"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : rec.medications?.length > 0 ? (
                         <div className="space-y-1">
                           {rec.medications.map((m: any) => (
                             <div key={m.id} className="flex justify-between text-slate-200">
                               <span>{m.name}</span>
                               <span className="font-mono text-emerald-400 font-bold">
-                                {m.versions?.[0]?.doseValue} {m.versions?.[0]?.doseUnit} (
-                                {m.versions?.[0]?.frequency})
+                                {m.versions?.[0]?.doseValue} {m.versions?.[0]?.doseUnit} ({m.versions?.[0]?.frequency})
                               </span>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <span className="text-slate-500 italic">Sem medicamentos diretos.</span>
+                        <span className="text-slate-500 italic">Sem medicamentos registrados nesta versão.</span>
                       )}
                     </div>
 
                     {/* Nutrition snapshot */}
                     <div className="p-3 rounded-lg bg-slate-950/50 border border-slate-800">
-                      <span className="text-slate-400 font-semibold block mb-1">
-                        Alvos Nutricionais Vigentes:
+                      <span className="text-slate-300 font-semibold block">
+                        Snapshot Nutricional da v{latestVer?.versionNumber || rec.currentVersion}:
+                      </span>
+                      <span className="text-[10px] text-slate-500 block mb-1.5">
+                        Estado capturado nesta versão
                       </span>
                       {snapshot.nutrition ? (
                         <div className="flex gap-4 font-mono text-slate-200">
@@ -303,7 +323,7 @@ export default function RecommendationsPage() {
                           </span>
                         </div>
                       ) : (
-                        <span className="text-slate-500 italic">Sem metas registradas.</span>
+                        <span className="text-slate-500 italic">Sem metas registradas nesta versão.</span>
                       )}
                     </div>
                   </div>
@@ -473,8 +493,9 @@ export default function RecommendationsPage() {
                   <label className="block text-xs text-slate-400 mb-1">Calorias (kcal)</label>
                   <input
                     type="number"
+                    placeholder="ex: 2200"
                     value={calories}
-                    onChange={(e) => setCalories(Number(e.target.value))}
+                    onChange={(e) => setCalories(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
                   />
                 </div>
@@ -482,8 +503,9 @@ export default function RecommendationsPage() {
                   <label className="block text-xs text-slate-400 mb-1">Proteína (g)</label>
                   <input
                     type="number"
+                    placeholder="ex: 190"
                     value={protein}
-                    onChange={(e) => setProtein(Number(e.target.value))}
+                    onChange={(e) => setProtein(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
                   />
                 </div>
@@ -491,8 +513,9 @@ export default function RecommendationsPage() {
                   <label className="block text-xs text-slate-400 mb-1">Carboidratos (g)</label>
                   <input
                     type="number"
+                    placeholder="ex: 200"
                     value={carbs}
-                    onChange={(e) => setCarbs(Number(e.target.value))}
+                    onChange={(e) => setCarbs(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
                   />
                 </div>
@@ -500,8 +523,9 @@ export default function RecommendationsPage() {
                   <label className="block text-xs text-slate-400 mb-1">Gorduras (g)</label>
                   <input
                     type="number"
+                    placeholder="ex: 60"
                     value={fat}
-                    onChange={(e) => setFat(Number(e.target.value))}
+                    onChange={(e) => setFat(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
                   />
                 </div>

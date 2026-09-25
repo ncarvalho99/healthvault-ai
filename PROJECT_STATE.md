@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 121 testes unitários (`node:test` + `tsx` em 35 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 131 testes unitários (`node:test` + `tsx` em 36 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -184,6 +184,16 @@ E2E_AI_MODEL="exploit"
       - *Checks independentes de Web Research*: Executados mesmo quando `Research = SKIPPED` (`STALE_PROSE_VS_VAULT`, `MUTUALLY_INCOMPATIBLE_CLAIMS`).
     - **Wiring do Chat Route**: A rota `/api/ai/chat` executa o gate de consistência no modelo `health-ai` tanto em pesquisas externas quanto em consultas estritamente locais ao prontuário (`LOCAL_VAULT_ONLY`), garantindo regeneração controlada única (máximo de 1 regeneração) e persistência no banco da resposta devidamente corrigida.
     - **Testes de Regressão de Pipeline Real**: Suíte de testes unitários expandida para 121 testes (35 suítes), integrando a rota `/api/ai/chat` via `NextRequest` simulado, comprovando regeneração de histórico desatualizado em `LOCAL_VAULT_ONLY` e mitigação de repetição preguiçosa com fontes Web.
+13. **Consistência Funcional, Snapshot de Recomendação & Qualidade de UI (HealthVault Functional & UI Fix)**:
+    - **WriteIntentGuard Determinístico Server-Side**: Prevenção estrita de mutações não intencionais no banco de dados em solicitações consultivas/propositivas ("monte uma dieta", "recomende opções"), exigindo comandos explícitos de alteração ("salve", "registre", "atualize no vault") ou confirmações diretas a ofertas prévias do assistente (`WRITE_INTENT_REQUIRED`).
+    - **Reconciliação de Autonomia no Turno Atual & Conflito Material de Baseline**: Distinção explícita entre dados estruturados persistidos no HealthVault e relatos autônomos mais recentes no turno corrente (ex: peso informado de 98 kg vs peso anterior no Vault de 85.7 kg), bloqueando gravações persistentes dependentes (`BASELINE_CONFLICT`) até que a discrepância seja resolvida.
+    - **Reconciliação Genérica de Tratamento no Consistency Gate (`STALE_ACTIVE_MEDICATION_CLAIM`)**: Detecção determinística que impede o assistente de alegar que tratamentos descontinuados continuam ativos quando o prontuário possui zero medicamentos vigentes, sem hardcode clínico.
+    - **Geração Dinâmica de `RecommendationVersion.summarySnapshot` via `RecommendationSnapshotBuilder`**: Eliminação da cópia do snapshot da versão anterior. Toda nova versão captura o estado real vigente (plano dietético ativo, medicamentos e métricas corporais) no momento do commit, com ordenação determinística de ferramentas para mutações combinadas no mesmo turno.
+    - **Renderizador Clínico de Markdown (`ClinicalMarkdown`)**: Substituição de tags `<p>` brutas por Markdown seguro e estilizado (títulos, listas ordenadas/não-ordenadas, tabelas responsivas, destaques em negrito e normalização visual de marcadores legados `===` / `---`), além de preview compacto no Dashboard com link para o protocolo integral.
+    - **Saneamento Completo de Dados Fictícios e Demo na UI de Produção**:
+      - Dashboard: remoção dos fallbacks de 2100 kcal / 190g proteína e do aviso estático "Em 14 dias / Titulação de dosagem", substituídos por dados reais ou indicadores neutros (`--` / `Nenhuma revisão agendada`).
+      - Formulários de Cadastro (Métricas, Laboratório, Dieta e Recomendações): remoção de valores pré-populados de exemplo (83.0 kg, 15.5% BF, 2100 kcal, etc.), utilizando campos limpos e placeholders explicativos.
+    - **Suíte de Testes Expandida**: 10 novos testes de regressão em `tests/unit/functional-consistency-ui.test.ts`, totalizando 131 testes unitários com 100% de aprovação.
 
 ---
 

@@ -18,11 +18,11 @@ export default function DietPage() {
 
   // New Diet Plan Form
   const [title, setTitle] = useState("");
-  const [goal, setGoal] = useState("Definição e queima de gordura");
-  const [calories, setCalories] = useState(2100);
-  const [protein, setProtein] = useState(190);
-  const [carbs, setCarbs] = useState(180);
-  const [fat, setFat] = useState(65);
+  const [goal, setGoal] = useState("");
+  const [calories, setCalories] = useState<number | string>("");
+  const [protein, setProtein] = useState<number | string>("");
+  const [carbs, setCarbs] = useState<number | string>("");
+  const [fat, setFat] = useState<number | string>("");
 
   const showToast = (message: string, type: "success" | "error" | "info" = "success") => {
     setToast({ message, type });
@@ -290,6 +290,7 @@ export default function DietPage() {
                 <label className="block text-xs text-slate-400 mb-1">Objetivo</label>
                 <input
                   type="text"
+                  placeholder="ex: Definição e queima de gordura"
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100"
@@ -301,8 +302,9 @@ export default function DietPage() {
                   <label className="block text-xs text-slate-400 mb-1">Calorias (kcal)</label>
                   <input
                     type="number"
+                    placeholder="ex: 2200"
                     value={calories}
-                    onChange={(e) => setCalories(Number(e.target.value))}
+                    onChange={(e) => setCalories(e.target.value)}
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 font-mono"
                   />
@@ -311,8 +313,9 @@ export default function DietPage() {
                   <label className="block text-xs text-slate-400 mb-1">Proteína (g)</label>
                   <input
                     type="number"
+                    placeholder="ex: 190"
                     value={protein}
-                    onChange={(e) => setProtein(Number(e.target.value))}
+                    onChange={(e) => setProtein(e.target.value)}
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 font-mono"
                   />
@@ -321,8 +324,9 @@ export default function DietPage() {
                   <label className="block text-xs text-slate-400 mb-1">Carboidratos (g)</label>
                   <input
                     type="number"
+                    placeholder="ex: 200"
                     value={carbs}
-                    onChange={(e) => setCarbs(Number(e.target.value))}
+                    onChange={(e) => setCarbs(e.target.value)}
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 font-mono"
                   />
@@ -331,8 +335,9 @@ export default function DietPage() {
                   <label className="block text-xs text-slate-400 mb-1">Gorduras (g)</label>
                   <input
                     type="number"
+                    placeholder="ex: 60"
                     value={fat}
-                    onChange={(e) => setFat(Number(e.target.value))}
+                    onChange={(e) => setFat(e.target.value)}
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 font-mono"
                   />

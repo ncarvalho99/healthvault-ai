@@ -2,6 +2,7 @@ import { HealthVaultTool, OpenAIToolDefinition } from "./types";
 import { z } from "zod";
 import { MedicationService } from "../../services/medication-service";
 import { RecommendationService } from "../../services/recommendation-service";
+import { RecommendationSnapshotBuilder } from "../../services/recommendation-snapshot-builder";
 import { DietService } from "../../services/diet-service";
 import { HealthService } from "../../services/health-service";
 import { db } from "../../db";
@@ -206,7 +207,7 @@ ToolRegistry.register({
 ToolRegistry.register({
   name: "healthvault_create_recommendation",
   version: 1,
-  description: "Creates a new clinical recommendation snapshot protocol with nutrition and guidance.",
+  description: "Creates a new clinical recommendation snapshot protocol with nutrition and guidance. Notes must be formatted as clean Markdown (headings, lists).",
   category: "recommendations",
   access: "write",
   risk: "medium",
@@ -215,13 +216,15 @@ ToolRegistry.register({
   enabled: true,
   inputSchema: z.object({
     title: z.string().describe("Protocol title"),
-    notes: z.string().describe("Clinical guidelines and notes"),
+    notes: z.string().describe("Clinical guidelines and notes formatted in structured Markdown (## Section, bullet points)"),
     reason: z.string().optional().describe("Reason for this new recommendation"),
   }),
   handler: async (ctx, args) => {
+    const snapshot = await RecommendationSnapshotBuilder.build(ctx.userId);
     const rec = await RecommendationService.create(ctx.userId, {
       title: args.title,
       notes: args.notes,
+      summarySnapshot: snapshot,
       changeReason: args.reason || "Recomendação proposta pelo assistente",
       conversationId: ctx.conversationId,
       actorType: ActorType.AI,
@@ -234,7 +237,7 @@ ToolRegistry.register({
 ToolRegistry.register({
   name: "healthvault_update_recommendation",
   version: 1,
-  description: "Updates an existing clinical recommendation protocol, creating an immutable new version.",
+  description: "Updates an existing clinical recommendation protocol, creating an immutable new version with fresh Vault state snapshot. Notes must be clean Markdown.",
   category: "recommendations",
   access: "write",
   risk: "medium",
@@ -244,7 +247,7 @@ ToolRegistry.register({
   inputSchema: z.object({
     recommendation_id: z.string().describe("ID of recommendation to update"),
     title: z.string().optional().describe("New title"),
-    notes: z.string().optional().describe("Updated notes"),
+    notes: z.string().optional().describe("Updated notes formatted in structured Markdown (## Section, bullet points)"),
     reason: z.string().describe("Reason for the clinical change"),
   }),
   handler: async (ctx, args) => {
@@ -254,11 +257,13 @@ ToolRegistry.register({
     });
     if (!existing) return { success: false, error: { code: "NOT_FOUND", message: "Recomendação não encontrada" } };
 
+    const freshSnapshot = await RecommendationSnapshotBuilder.build(ctx.userId);
+
     const updated = await RecommendationService.update(ctx.userId, {
       recommendationId: existing.id,
       title: args.title,
       notes: args.notes,
-      summarySnapshot: (existing.versions[0]?.summarySnapshot as any) || {},
+      summarySnapshot: freshSnapshot,
       changeReason: args.reason,
       conversationId: ctx.conversationId,
       actorType: ActorType.AI,

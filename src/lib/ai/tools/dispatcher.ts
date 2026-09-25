@@ -3,6 +3,7 @@ import { ToolRegistry } from "./registry";
 import { PermissionEngine } from "./permissions";
 import { ApprovalEngine } from "./approvals";
 import { IdempotencyEngine } from "./idempotency";
+import { WriteIntentGuard } from "./write-intent-guard";
 import { ToolExecutionContext, ToolExecutionResult } from "./types";
 import { logAudit } from "../../audit";
 
@@ -52,6 +53,47 @@ export class ToolDispatcher {
           message: "Operações de alteração ou gravação estão desabilitadas no modo Chat Apenas (CHAT_ONLY). Apenas consultas de leitura são autorizadas.",
         },
       };
+    }
+
+    // 1.6 Write Intent Guard: prevent unintended database mutations on advisory/generative requests
+    if (tool.access === "write") {
+      const intentCheck = WriteIntentGuard.check({
+        userMessage: context.userMessage,
+        previousAssistantMessage: context.previousAssistantMessage,
+        toolName,
+        toolAccess: tool.access,
+        toolCategory: tool.category,
+        vaultWeightKg: context.vaultWeightKg,
+      });
+
+      if (!intentCheck.allowed) {
+        try {
+          await logAudit({
+            userId,
+            action: "AI_TOOL_WRITE_BLOCKED_ADVISORY",
+            entity: "AI_TOOL",
+            entityId: toolCallId,
+            metadata: {
+              toolName,
+              intent: intentCheck.intent,
+              reason: intentCheck.reason,
+              conversationId,
+            },
+          });
+        } catch {
+          // Safe in unit test runs without active database
+        }
+
+        return {
+          success: false,
+          error: {
+            code: intentCheck.intent === "BASELINE_CONFLICT" ? "BASELINE_CONFLICT" : "WRITE_INTENT_REQUIRED",
+            message:
+              intentCheck.reason ||
+              "WRITE_INTENT_REQUIRED: Operações de gravação exigem intenção explícita de alteração no HealthVault.",
+          },
+        };
+      }
     }
 
     try {

@@ -25,8 +25,8 @@ export default function HealthPage() {
   const [toast, setToast] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
 
   // New Metric State
-  const [newWeight, setNewWeight] = useState(83.0);
-  const [newBf, setNewBf] = useState(15.5);
+  const [newWeight, setNewWeight] = useState<number | string>("");
+  const [newBf, setNewBf] = useState<number | string>("");
   const [metricNotes, setMetricNotes] = useState("");
 
   // Edit Metric Modal State
@@ -47,9 +47,9 @@ export default function HealthPage() {
   const [editSymptomTrigger, setEditSymptomTrigger] = useState("");
 
   // New Lab State
-  const [testName, setTestName] = useState("Perfil Lipídico");
-  const [markerName, setMarkerName] = useState("Glicemia de Jejum");
-  const [resultValue, setResultValue] = useState(88);
+  const [testName, setTestName] = useState("");
+  const [markerName, setMarkerName] = useState("");
+  const [resultValue, setResultValue] = useState<number | string>("");
   const [unit, setUnit] = useState("mg/dL");
 
   // Edit Lab Modal State
@@ -101,11 +101,13 @@ export default function HealthPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           weightKg: Number(newWeight),
-          bodyFatPct: Number(newBf),
+          bodyFatPct: newBf !== "" ? Number(newBf) : null,
           notes: metricNotes,
         }),
       });
       if (res.ok) {
+        setNewWeight("");
+        setNewBf("");
         setMetricNotes("");
         showToast("Medida registrada com sucesso!");
         loadAll();
@@ -211,6 +213,10 @@ export default function HealthPage() {
         }),
       });
       if (res.ok) {
+        setTestName("");
+        setMarkerName("");
+        setResultValue("");
+        setUnit("mg/dL");
         showToast("Exame registrado com sucesso!");
         loadAll();
       } else {
@@ -384,8 +390,9 @@ export default function HealthPage() {
                   <input
                     type="number"
                     step="0.1"
+                    placeholder="ex: 85.5"
                     value={newWeight}
-                    onChange={(e) => setNewWeight(Number(e.target.value))}
+                    onChange={(e) => setNewWeight(e.target.value)}
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 font-mono"
                   />
@@ -395,8 +402,9 @@ export default function HealthPage() {
                   <input
                     type="number"
                     step="0.1"
+                    placeholder="ex: 15.0"
                     value={newBf}
-                    onChange={(e) => setNewBf(Number(e.target.value))}
+                    onChange={(e) => setNewBf(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 font-mono"
                   />
                 </div>
@@ -601,6 +609,7 @@ export default function HealthPage() {
                   <label className="block text-xs text-slate-400 mb-1">Nome do Exame</label>
                   <input
                     type="text"
+                    placeholder="ex: Perfil Lipídico"
                     value={testName}
                     onChange={(e) => setTestName(e.target.value)}
                     required
@@ -611,6 +620,7 @@ export default function HealthPage() {
                   <label className="block text-xs text-slate-400 mb-1">Marcador</label>
                   <input
                     type="text"
+                    placeholder="ex: Glicemia de Jejum"
                     value={markerName}
                     onChange={(e) => setMarkerName(e.target.value)}
                     required
@@ -623,8 +633,9 @@ export default function HealthPage() {
                     <input
                       type="number"
                       step="any"
+                      placeholder="ex: 88"
                       value={resultValue}
-                      onChange={(e) => setResultValue(Number(e.target.value))}
+                      onChange={(e) => setResultValue(e.target.value)}
                       required
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 font-mono"
                     />
