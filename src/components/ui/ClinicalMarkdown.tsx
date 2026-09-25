@@ -3,34 +3,13 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { normalizeLegacyNotes } from "@/lib/markdown/legacy-notes";
 
 interface ClinicalMarkdownProps {
   content: string;
   className?: string;
   preview?: boolean;
   maxPreviewChars?: number;
-}
-
-/**
- * Normalizes legacy text formatting (e.g. === PROTOCOLO === or --- FARMACOLOGIA ---)
- * for display into clean Markdown headings and blocks without mutating stored database records.
- */
-function normalizeLegacyNotes(raw: string): string {
-  if (!raw) return "";
-
-  let text = raw;
-
-  // Convert === TITLE === or === TITLE to ## TITLE
-  text = text.replace(/===\s*([^=\n]+?)\s*===/g, "\n\n## $1\n\n");
-  text = text.replace(/^===\s*([^\n]+)/gm, "\n\n## $1\n\n");
-
-  // Convert --- SECTION --- to ### SECTION
-  text = text.replace(/---\s*([^-\n]+?)\s*---/g, "\n\n### $1\n\n");
-
-  // Clean excessive blank lines
-  text = text.replace(/\n{3,}/g, "\n\n").trim();
-
-  return text;
 }
 
 export function ClinicalMarkdown({

@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 178 testes unitários (`node:test` + `tsx` em 59 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 181 testes unitários (`node:test` + `tsx` em 60 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -204,7 +204,8 @@ E2E_AI_MODEL="exploit"
     - **Gate sem doses fixas e mais preciso**: removidos `1.7 mg` e o fallback de semaglutida 2 mg; `STALE_ACTIVE_MEDICATION_CLAIM` exige contexto de medicamento na mesma frase ("continue com a dieta" não dispara); `MUTUALLY_INCOMPATIBLE_CLAIMS` ignora negativas restritas a uma jurisdição/agência.
     - **Integração de IA isolada por usuário**: o fallback do chat só usa integrações de um usuário ADMIN, nunca a de outro usuário comum.
     - **Dashboard**: gordura corporal ausente exibe "não informada" (sem ícone de tendência); lembretes vencidos exibem "Atrasado há N dias".
-    - **Suíte**: 178 testes unitários em 59 suítes, 100% de aprovação (`multi-domain-turn-regression`, `domain-scoped-write-intent`, `negation-provenance-gate`).
+    - **Suíte**: 181 testes unitários em 60 suítes, 100% de aprovação (`multi-domain-turn-regression`, `domain-scoped-write-intent`, `negation-provenance-gate`, `legacy-notes-markdown`).
+    - **Tabelas Markdown nas notas**: o normalizador de marcadores legados (`=== X ===`, `--- X ---`) passou a casar só linhas inteiras sem `|`, preservando separadores de tabela (`|---|---|`).
 
 ---
 
