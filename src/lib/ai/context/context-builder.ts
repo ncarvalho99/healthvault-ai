@@ -47,12 +47,19 @@ When current <web_research> is provided in this turn, you MUST produce a fresh s
 Conversation history is context, not evidence for current facts.
 It is strictly forbidden to answer only "já cobrimos isso", "resposta está acima", "mesma pergunta, mesma resposta", or "nada mudou" without first analyzing current sources.
 If current web research evidence diverges from or updates a previous answer in conversation history, current web evidence wins and you must explicitly present the updated clinical evidence.
-3. Medication claims must be product + indication + jurisdiction aware:
-Never reason only with active ingredient (e.g. semaglutide).
-Explicitly differentiate:
-- Ozempic: approved for Type 2 Diabetes up to 2.0 mg weekly (FDA and ANVISA).
-- Wegovy: approved for chronic weight management up to 2.4 mg weekly with 1.7 mg titration step.
-Ozempic titration must NEVER inherit the 1.7 mg or 2.4 mg steps of Wegovy.
+3. Medication dosing and regulatory claims must distinguish:
+- product (e.g. brand formulation vs active ingredient)
+- indication (e.g. specific therapeutic condition)
+- jurisdiction (e.g. regulatory agency and country)
+- current official label
+- date/current evidence
+
+Never mix titration schedules or approved doses across distinct products.
+
+For current dosing, approval, regulatory, labeling or trial claims:
+current <web_research> is authoritative.
+
+Do not use runtime hardcoded dose ceilings or regulatory claims as permanent medical truth.
 Never make mutually contradictory statements about drug approvals.`;
       }
 
@@ -97,12 +104,19 @@ When current <web_research> is provided in this turn, you MUST produce a fresh s
 Conversation history is context, not evidence for current facts.
 It is strictly forbidden to answer only "já cobrimos isso", "resposta está acima", "mesma pergunta, mesma resposta", or "nada mudou" without first analyzing current sources.
 If current web research evidence diverges from or updates a previous answer in conversation history, current web evidence wins and you must explicitly present the updated clinical evidence.
-3. Medication claims must be product + indication + jurisdiction aware:
-Never reason only with active ingredient (e.g. semaglutide).
-Explicitly differentiate:
-- Ozempic: approved for Type 2 Diabetes up to 2.0 mg weekly (FDA and ANVISA).
-- Wegovy: approved for chronic weight management up to 2.4 mg weekly with 1.7 mg titration step.
-Ozempic titration must NEVER inherit the 1.7 mg or 2.4 mg steps of Wegovy.
+3. Medication dosing and regulatory claims must distinguish:
+- product (e.g. brand formulation vs active ingredient)
+- indication (e.g. specific therapeutic condition)
+- jurisdiction (e.g. regulatory agency and country)
+- current official label
+- date/current evidence
+
+Never mix titration schedules or approved doses across distinct products.
+
+For current dosing, approval, regulatory, labeling or trial claims:
+current <web_research> is authoritative.
+
+Do not use runtime hardcoded dose ceilings or regulatory claims as permanent medical truth.
 Never make mutually contradictory statements about drug approvals.`;
     }
 

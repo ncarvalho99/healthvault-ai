@@ -13,6 +13,7 @@ import { AssistantResponseProcessor } from "@/lib/ai/response/assistant-response
 import { resolveResearchPolicy as resolveWebResearchPolicy } from "@/lib/ai/research/research-policy";
 import { ResearchOrchestrator } from "@/lib/ai/research/research-orchestrator";
 import { EvidenceConsistencyGate } from "@/lib/ai/response/evidence-consistency-gate";
+import { isHealthAiModel } from "@/lib/ai/models/model-identification";
 import { logAudit } from "@/lib/audit";
 import { SenderType } from "@prisma/client";
 
@@ -358,17 +359,21 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
       finalResponseMetadata = processed.metadata;
 
       // 6.5 Evidence Consistency Gate: validate clinical consistency before accepting response
-      if (
-        researchResult.status === "SUCCESS" &&
-        researchResult.sources.length > 0 &&
+      const shouldRunConsistencyGate =
+        (isHealthAiModel(activeModel) || (researchResult.status === "SUCCESS" && researchResult.sources.length > 0)) &&
         !hasRegeneratedForConsistency &&
-        iteration < MAX_TOOL_ITERATIONS
-      ) {
+        iteration < MAX_TOOL_ITERATIONS;
+
+      if (shouldRunConsistencyGate) {
+        const vaultBlock = contextMessages.find(
+          (m) => m.role === "system" && m.content?.includes("<healthvault_data>")
+        )?.content;
+
         const consistency = EvidenceConsistencyGate.evaluate({
           userMessage: content,
           assistantText: finalAssistantText,
-          sources: researchResult.sources,
-          vaultContextBlock: contextMessages.find((m) => m.role === "system" && m.content?.includes("<healthvault_data>"))?.content,
+          sources: researchResult.sources || [],
+          vaultContextBlock: vaultBlock,
           conversationHistory: currentMessages,
         });
 

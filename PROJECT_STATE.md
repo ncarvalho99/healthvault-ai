@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 119 testes unitários (`node:test` + `tsx` em 35 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 121 testes unitários (`node:test` + `tsx` em 35 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -176,6 +176,14 @@ E2E_AI_MODEL="exploit"
     - **Preservação de Consultas Locais**: Perguntas estritamente pessoais (`LOCAL_VAULT_ONLY`) continuam sem efetuar pesquisa externa desnecessária.
     - **Sincronização Atômica via Transação Prisma (`db.$transaction`)**: Endpoints de aprovação e rejeição atualizam atomicamente `ai_tool_executions` e a mensagem associada (`Message.metadata.toolExecutions`), prevenindo inconsistências e garantindo rollback automático caso a atualização do metadata falhe.
     - **Estado Terminal para Conflito de Versão e Expiração**: `VERSION_CONFLICT` e `PROPOSAL_EXPIRED` gravam `AiToolExecution` como `FAILED` com seu respectivo `errorCode` (não permanecendo em `PENDING_APPROVAL`) e metadata correspondente no chat.
+12. **Fresh Evidence Grounding & Reconciliação de Estado Atual (Wiring Fix & Regras Estruturais)**:
+    - **Remoção de Fatos Clínicos Hardcoded no Runtime**: Substituição de regras clínicas estáticas tratadas como verdade permanente por regras estruturais que exigem diferenciação de produto, indicação, jurisdição, bula atual e data de evidência.
+    - **Web Research como Autoridade Clínica**: O runtime trata `<web_research>` como autoridade primária para dosagens, status regulatório e ensaios clínicos vigentes, sem codificar listas de dosagens manuais no sistema.
+    - **Desacoplamento do EvidenceConsistencyGate**:
+      - *Checks dependentes de Web Research*: Executados quando `sources.length > 0` (`LAZY_REPETITION_REFERENCE`, `CONTRADICTS_SOURCE_CONTEXT`, `CROSS_PRODUCT_DOSING_CONTAMINATION` baseado no contexto das fontes fornecidas).
+      - *Checks independentes de Web Research*: Executados mesmo quando `Research = SKIPPED` (`STALE_PROSE_VS_VAULT`, `MUTUALLY_INCOMPATIBLE_CLAIMS`).
+    - **Wiring do Chat Route**: A rota `/api/ai/chat` executa o gate de consistência no modelo `health-ai` tanto em pesquisas externas quanto em consultas estritamente locais ao prontuário (`LOCAL_VAULT_ONLY`), garantindo regeneração controlada única (máximo de 1 regeneração) e persistência no banco da resposta devidamente corrigida.
+    - **Testes de Regressão de Pipeline Real**: Suíte de testes unitários expandida para 121 testes (35 suítes), integrando a rota `/api/ai/chat` via `NextRequest` simulado, comprovando regeneração de histórico desatualizado em `LOCAL_VAULT_ONLY` e mitigação de repetição preguiçosa com fontes Web.
 
 ---
 

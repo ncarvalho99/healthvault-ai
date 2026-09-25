@@ -25,14 +25,23 @@ const LAZY_REFERENCE_PATTERNS = [
 export class EvidenceConsistencyGate {
   /**
    * Deterministic consistency check for clinical assistant responses grounded in Web Research and HealthVault state.
+   * Separates Web-dependent checks (requiring sources) and Web-independent checks (Vault state & internal consistency).
    */
   static evaluate(options: ConsistencyGateOptions): ConsistencyGateResult {
     const { userMessage, assistantText, sources = [], vaultContextBlock = "" } = options;
     const violations: string[] = [];
     const lowerText = assistantText.toLowerCase();
 
-    // 1. Lazy Conversational Repetition Check (when fresh sources exist)
+    // ==========================================
+    // 1. CHECKS DEPENDENT ON WEB RESEARCH (sources.length > 0)
+    // ==========================================
     if (sources.length > 0) {
+      const sourcesText = sources
+        .map((s) => `${s.title} ${s.snippet || ""}`)
+        .join(" ")
+        .toLowerCase();
+
+      // 1.1 Lazy Conversational Repetition Check
       const isLazy = LAZY_REFERENCE_PATTERNS.some((p) => p.test(assistantText));
       if (
         isLazy &&
@@ -43,36 +52,65 @@ export class EvidenceConsistencyGate {
           "LAZY_REPETITION_REFERENCE: Assistant deflected current inquiry by referring to previous chat turns instead of synthesizing current <web_research> sources."
         );
       }
-    }
 
-    // 2. Contradicts Source Context (e.g. Phase 3 trial results reported vs claims of no results)
-    if (sources.length > 0) {
-      const sourcesText = sources
-        .map((s) => `${s.title} ${s.snippet || ""}`)
-        .join(" ")
-        .toLowerCase();
+      // 1.2 Contradicts Source Context (e.g. trial results reported vs claims of no results)
+      const sourcesHaveTrialResults =
+        /\b(phase\s*3|fase\s*3|trial|ensaio|estudo|triumph)\b/i.test(sourcesText) &&
+        /\b(results|reported|efficacy|published|demonstrated|conclu[ií]d[oa]|resultados|apresentou|demonstrou)\b/i.test(sourcesText);
 
-      // Check Retatrutide Phase 3 milestone: sources indicate TRIUMPH / results reported in 2026
-      const sourcesHavePhase3Results =
-        /\b(triumph|phase\s*3|fase\s*3)\b/i.test(sourcesText) &&
-        /\b(results|reported|efficacy|published|demonstrated|conclu[ií]d[oa]|resultados)\b/i.test(sourcesText);
-
-      if (sourcesHavePhase3Results) {
-        const claimsNoPhase3Results =
-          /\b(fase\s*3|phase\s*3)\b[^\n.!?]*\b(ainda\s+est[aãá]o?\s+em\s+andamento|sem\s+resultados|n[aã]o\s+(h[aá]|foram|possui|teve)\s+resultados)\b/i.test(
+      if (sourcesHaveTrialResults) {
+        const claimsNoTrialResults =
+          /\b(fase\s*3|phase\s*3|ensaio|estudo|trial)\b[^\n.!?]*\b(ainda\s+est[aãá]o?\s+em\s+andamento|sem\s+resultados|n[aã]o\s+(h[aá]|foram|possui|teve)\s+resultados)\b/i.test(
             lowerText
           ) ||
-          /\b(sem\s+dados\s+de\s+fase\s*3|n[aã]o\s+h[aá]\s+dados\s+de\s+fase\s*3)\b/i.test(lowerText);
+          /\b(sem\s+dados\s+de\s+fase\s*3|n[aã]o\s+h[aá]\s+dados\s+de\s+fase\s*3|no\s+phase\s*3\s+data)\b/i.test(lowerText);
 
-        if (claimsNoPhase3Results) {
+        if (claimsNoTrialResults) {
           violations.push(
-            "CONTRADICTS_SOURCE_CONTEXT: Assistant asserted Phase 3 has no published results, directly contradicting provided 2026 trial evidence."
+            "CONTRADICTS_SOURCE_CONTEXT: Assistant asserted clinical trial has no published results, directly contradicting provided source evidence."
           );
+        }
+      }
+
+      // 1.3 Cross-Product Dosing Contamination Grounded in Sources
+      // Check if sources distinguish products (e.g. Wegovy vs Ozempic) and associate specific dose steps
+      const clauses = assistantText.split(/[;!?]|\.\s+/);
+      for (const clause of clauses) {
+        const lowerClause = clause.toLowerCase();
+        const doseRegex = /\b(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g))\b/gi;
+        const clauseDoses = Array.from(lowerClause.matchAll(doseRegex)).map((m) => m[1]);
+
+        if (clauseDoses.length > 0) {
+          if (
+            sourcesText.includes("wegovy") &&
+            sourcesText.includes("ozempic") &&
+            lowerClause.includes("ozempic") &&
+            !lowerClause.includes("wegovy")
+          ) {
+            for (const d of clauseDoses) {
+              const normalizedD = d.replace(/\s+/g, "\\s*");
+              const wegovyDosePattern = new RegExp(`wegovy[^.]*?${normalizedD}|${normalizedD}[^.]*?wegovy`, "i");
+              const exclusivePattern = new RegExp(
+                `(?:exclusive|exclusiv[ao]|pertence|apenas|only)[^.]*?${normalizedD}|${normalizedD}[^.]*?(?:exclusive|exclusiv[ao]|pertence|apenas|only)`,
+                "i"
+              );
+              if (wegovyDosePattern.test(sourcesText) && (exclusivePattern.test(sourcesText) || /1[.,]7\s*mg/i.test(d))) {
+                violations.push(
+                  `CROSS_PRODUCT_DOSING_CONTAMINATION: Assistant attributed dose ${d} to Ozempic in contradiction to source evidence distinguishing Wegovy and Ozempic.`
+                );
+                break;
+              }
+            }
+          }
         }
       }
     }
 
-    // 3. Mutually Incompatible Claims (e.g. 'not approved for any indication' vs 'approved for diabetes/Ozempic')
+    // ==========================================
+    // 2. CHECKS INDEPENDENT OF WEB RESEARCH (Run even when Research=SKIPPED)
+    // ==========================================
+
+    // 2.1 Mutually Incompatible Claims (Internal logical contradiction)
     const claimsNotApprovedForAny =
       /\b(n[aã]o\s+[eé]\s+aprovad[ao]\s+para\s+nenhuma\s+indica[cç][aã]o|not\s+approved\s+for\s+any\s+indication|n[aã]o\s+possui\s+aprova[cç][aã]o\s+para\s+nenhum\s+uso)\b/i.test(
         lowerText
@@ -89,35 +127,41 @@ export class EvidenceConsistencyGate {
       );
     }
 
-    // 4. Cross-Product Dosing Contamination
-    // Ozempic is for T2D (0.25 -> 0.5 -> 1.0 -> 2.0 mg max). 1.7 mg is exclusive to Wegovy.
-    const clauses = assistantText.split(/[;!?]|\.\s+/);
-    for (const clause of clauses) {
-      const lowerClause = clause.toLowerCase();
-      if (lowerClause.includes("ozempic") && !lowerClause.includes("wegovy")) {
-        if (/\b1[.,]7\s*mg\b/i.test(lowerClause)) {
-          violations.push(
-            "CROSS_PRODUCT_DOSING_CONTAMINATION: Ozempic titration/dosing contaminated with Wegovy-exclusive 1.7 mg step. Ozempic (T2D) titrates 0.25 -> 0.5 -> 1.0 -> 2.0 mg max; 1.7 mg is exclusive to Wegovy."
-          );
-          break;
-        }
-      }
-    }
-
-    // 5. Stale Conversational History vs Current Structured Vault State
+    // 2.2 Stale Conversational History vs Current Structured Vault State
     if (vaultContextBlock) {
-      // Check if Vault shows an active medication dose (e.g. Semaglutida 2 mg active)
-      const sema2mgActiveInVault =
-        /semaglutid[ae][^;]*2(\.0)?\s*mg/i.test(vaultContextBlock) &&
-        !/none registered/i.test(vaultContextBlock);
+      const activeMedsMatch = vaultContextBlock.match(/Active Medications:\s*([^\n<]+)/i);
+      const medsSummary = activeMedsMatch ? activeMedsMatch[1] : vaultContextBlock;
 
-      if (sema2mgActiveInVault) {
-        const claimsSema2mgPending =
+      if (!/none registered|no active medications/i.test(medsSummary)) {
+        const doseMatches = medsSummary.matchAll(/([A-Za-zÀ-ÿ\s]+)\s*\(\s*([^,]+?)(?:,\s*[^,]+?)*,\s*v?\d+\s*\)/g);
+        let flagged = false;
+        for (const match of doseMatches) {
+          const medName = match[1].trim().toLowerCase();
+          const dose = match[2].trim().toLowerCase();
+          const escapedDose = dose.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+          const escapedMed = medName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+          const claimsPending = new RegExp(
+            `\\b(?:dose\\s+de\\s+${escapedDose}|${escapedMed}\\s+de\\s+${escapedDose}|${escapedDose})\\s+(?:est[aá]\\s+pendente|aguarda\\s+aprova[cç][aã]o|ainda\\s+n[aã]o\\s+foi\\s+aprovad[ao]|pendente\\s+de\\s+aprova[cç][aã]o|proposta\\s+de\\s+${escapedDose}\\s+pendente)`,
+            "i"
+          );
+
+          if (claimsPending.test(assistantText)) {
+            violations.push(
+              `STALE_PROSE_VS_VAULT: Assistant referred to a dose change as 'pending' based on past conversation history, but HealthVault structured data shows '${match[1].trim()} ${match[2].trim()}' is already active.`
+            );
+            flagged = true;
+            break;
+          }
+        }
+
+        if (
+          !flagged &&
+          /semaglutid[ae][^;]*2(\.0)?\s*mg/i.test(vaultContextBlock) &&
           /\b(dose\s+de\s+2\s*mg\s+(est[aá]\s+pendente|aguarda\s+aprova[cç][aã]o|ainda\s+n[aã]o\s+foi\s+aprovada)|proposta\s+de\s+2\s*mg\s+pendente)\b/i.test(
             lowerText
-          );
-
-        if (claimsSema2mgPending) {
+          )
+        ) {
           violations.push(
             "STALE_PROSE_VS_VAULT: Assistant referred to a dose change as 'pending' based on past conversation history, but HealthVault structured data shows the dose is already active."
           );
@@ -129,14 +173,14 @@ export class EvidenceConsistencyGate {
 
     let remediationPrompt: string | undefined = undefined;
     if (!isValid) {
-      remediationPrompt = `Please regenerate your response to correct these clinical issues:
+      remediationPrompt = `Please regenerate your response to correct these clinical consistency issues:
 ${violations.map((v) => `- ${v}`).join("\n")}
 
 Guidelines:
 1. Synthesize directly from <web_research> and <healthvault_data>.
-2. Never dismiss the question as already answered. Fresh evidence always requires an updated synthesis.
-3. Keep product indications distinct (Ozempic for T2D up to 2.0 mg; Wegovy for obesity up to 2.4 mg with 1.7 mg step). Never mix dosing across products.
-4. Current structured Vault state overrides past conversational history.`;
+2. Do not refer to past turns ("já cobrimos", "conforme dito acima", "veja acima").
+3. Current structured HealthVault data is authoritative over conversational history.
+4. For clinical and regulatory claims, follow current <web_research> evidence and distinguish products, indications, and jurisdictions accurately without mixing distinct products.`;
     }
 
     return {
