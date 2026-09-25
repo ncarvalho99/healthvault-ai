@@ -55,8 +55,9 @@ export class MedicationService {
     });
   }
 
-  static async getById(userId: string, id: string) {
-    return db.medication.findFirst({
+  static async getById(userId: string, id: string, txClient?: any) {
+    const client = txClient || db;
+    return client.medication.findFirst({
       where: { id, userId },
       include: {
         versions: {
@@ -66,8 +67,9 @@ export class MedicationService {
     });
   }
 
-  static async findByName(userId: string, name: string) {
-    return db.medication.findFirst({
+  static async findByName(userId: string, name: string, txClient?: any) {
+    const client = txClient || db;
+    return client.medication.findFirst({
       where: {
         userId,
         OR: [
@@ -85,8 +87,8 @@ export class MedicationService {
     });
   }
 
-  static async create(userId: string, input: CreateMedicationInput) {
-    const med = await db.$transaction(async (tx) => {
+  static async create(userId: string, input: CreateMedicationInput, txClient?: any) {
+    const runInTx = async (tx: any) => {
       const createdMed = await tx.medication.create({
         data: {
           userId,
@@ -119,7 +121,9 @@ export class MedicationService {
       });
 
       return { ...createdMed, currentVersion: version };
-    });
+    };
+
+    const med = txClient ? await runInTx(txClient) : await db.$transaction(runInTx);
 
     await logAudit({
       userId,
@@ -137,8 +141,9 @@ export class MedicationService {
     return med;
   }
 
-  static async updateDose(userId: string, input: UpdateMedicationDoseInput) {
-    const med = await db.medication.findFirst({
+  static async updateDose(userId: string, input: UpdateMedicationDoseInput, txClient?: any) {
+    const client = txClient || db;
+    const med = await client.medication.findFirst({
       where: { id: input.medicationId, userId },
       include: {
         versions: {
@@ -155,7 +160,7 @@ export class MedicationService {
     const latest = med.versions[0];
     const nextVersionNumber = latest ? latest.versionNumber + 1 : 1;
 
-    const updated = await db.$transaction(async (tx) => {
+    const runInTx = async (tx: any) => {
       // Close end date on previous version
       if (latest && !latest.endDate) {
         await tx.medicationVersion.update({
@@ -191,7 +196,9 @@ export class MedicationService {
       });
 
       return { medication: med, version: newVer };
-    });
+    };
+
+    const updated = txClient ? await runInTx(txClient) : await db.$transaction(runInTx);
 
     await logAudit({
       userId,

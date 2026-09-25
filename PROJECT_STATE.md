@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 102 testes unitários (`node:test` + `tsx` em 34 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 104 testes unitários (`node:test` + `tsx` em 34 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |

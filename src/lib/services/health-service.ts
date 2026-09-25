@@ -86,9 +86,11 @@ export class HealthService {
       flag?: LabFlag;
       notes?: string;
       conversationId?: string;
-    }
+    },
+    txClient?: any
   ) {
-    const lab = await db.labTest.create({
+    const client = txClient || db;
+    const lab = await client.labTest.create({
       data: {
         userId,
         testName: data.testName,

@@ -62,7 +62,11 @@ async function syncMessageToolExecution(
       }) || null;
   }
 
-  if (!message) return;
+  if (!message) {
+    throw new Error(
+      `Mensagem associada à execução ${executionId} (toolCallId: ${toolCallId}) não foi encontrada na conversa ${conversationId}.`
+    );
+  }
 
   const currentMetadata = (message.metadata as Record<string, any>) || {};
   const toolExecutions = Array.isArray(currentMetadata.toolExecutions)
@@ -123,17 +127,21 @@ async function syncMessageToolExecution(
     return te;
   });
 
-  if (matched) {
-    await client.message.update({
-      where: { id: message.id },
-      data: {
-        metadata: {
-          ...currentMetadata,
-          toolExecutions: updatedToolExecutions,
-        },
-      },
-    });
+  if (!matched) {
+    throw new Error(
+      `Tool execution ${executionId} (toolCallId: ${toolCallId}) não foi encontrada no metadata da mensagem ${message.id}.`
+    );
   }
+
+  await client.message.update({
+    where: { id: message.id },
+    data: {
+      metadata: {
+        ...currentMetadata,
+        toolExecutions: updatedToolExecutions,
+      },
+    },
+  });
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -201,14 +209,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: true, status: "REJECTED" });
     }
 
-    // Check Proposal TTL / Expiration
-    if (meta?.expiresAt) {
-      const isExpired = new Date() > new Date(meta.expiresAt);
-      if (isExpired) {
-        const expiredMsg =
-          "Esta proposta de alteração expirou. Solicite ao assistente uma nova proposta atualizada.";
+    // Action == approve: Encompass TTL re-check, version re-check, domain mutation, AiToolExecution and Message metadata in one transaction!
+    const txResult = await db.$transaction(async (tx) => {
+      // 1. Re-check Proposal TTL / Expiration inside transaction
+      if (meta?.expiresAt) {
+        const isExpired = new Date() > new Date(meta.expiresAt);
+        if (isExpired) {
+          const expiredMsg =
+            "Esta proposta de alteração expirou. Solicite ao assistente uma nova proposta atualizada.";
 
-        await db.$transaction(async (tx) => {
           await tx.aiToolExecution.update({
             where: { id: execution.id },
             data: {
@@ -228,236 +237,205 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             errorCode: "PROPOSAL_EXPIRED",
             errorMessage: expiredMsg,
           });
-        });
 
-        await logAudit({
-          userId: user!.userId,
-          action: "AI_TOOL_PROPOSAL_EXPIRED",
-          entity: "AI_TOOL_EXECUTION",
-          entityId: execution.id,
-          metadata: { toolName: execution.toolName, expiredAt: meta.expiresAt },
-        });
-
-        return NextResponse.json(
-          {
+          return {
+            type: "EXPIRED" as const,
             error: expiredMsg,
             code: "PROPOSAL_EXPIRED",
-          },
-          { status: 410 }
-        );
-      }
-    }
-
-    // Check Optimistic Concurrency / Version Conflict
-    if (meta?.entityVersionAtProposal !== undefined && meta?.entityId) {
-      if (meta.entityType === "medication") {
-        const currentMed = await db.medication.findUnique({
-          where: { id: meta.entityId },
-          include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
-        });
-        const currentVersion = currentMed?.versions[0]?.versionNumber;
-        if (currentVersion !== undefined && currentVersion !== meta.entityVersionAtProposal) {
-          const conflictMsg = `Conflito de versão: este medicamento foi alterado (v${meta.entityVersionAtProposal} → v${currentVersion}) após a criação da proposta. Gere uma nova proposta.`;
-
-          await db.$transaction(async (tx) => {
-            await tx.aiToolExecution.update({
-              where: { id: execution.id },
-              data: {
-                status: "FAILED",
-                errorCode: "VERSION_CONFLICT",
-                errorMessage: conflictMsg,
-                completedAt: new Date(),
-              },
-            });
-
-            await syncMessageToolExecution(tx, {
-              conversationId: execution.conversationId,
-              messageId: execution.messageId,
-              executionId: execution.id,
-              toolCallId: execution.toolCallId,
-              action: "conflict",
-              errorCode: "VERSION_CONFLICT",
-              errorMessage: conflictMsg,
-            });
-          });
-
-          await logAudit({
-            userId: user!.userId,
-            action: "AI_TOOL_VERSION_CONFLICT",
-            entity: "AI_TOOL_EXECUTION",
-            entityId: execution.id,
-            metadata: { toolName: execution.toolName, currentVersion, proposalVersion: meta.entityVersionAtProposal },
-          });
-
-          return NextResponse.json(
-            {
-              error: conflictMsg,
-              code: "VERSION_CONFLICT",
-            },
-            { status: 409 }
-          );
-        }
-      } else if (meta.entityType === "diet") {
-        const currentDiet = await db.dietPlan.findUnique({
-          where: { id: meta.entityId },
-        });
-        if (currentDiet && currentDiet.currentVersion !== meta.entityVersionAtProposal) {
-          const conflictMsg = `Conflito de versão: o plano alimentar mudou (v${meta.entityVersionAtProposal} → v${currentDiet.currentVersion}) desde a geração desta sugestão.`;
-
-          await db.$transaction(async (tx) => {
-            await tx.aiToolExecution.update({
-              where: { id: execution.id },
-              data: {
-                status: "FAILED",
-                errorCode: "VERSION_CONFLICT",
-                errorMessage: conflictMsg,
-                completedAt: new Date(),
-              },
-            });
-
-            await syncMessageToolExecution(tx, {
-              conversationId: execution.conversationId,
-              messageId: execution.messageId,
-              executionId: execution.id,
-              toolCallId: execution.toolCallId,
-              action: "conflict",
-              errorCode: "VERSION_CONFLICT",
-              errorMessage: conflictMsg,
-            });
-          });
-
-          return NextResponse.json(
-            {
-              error: conflictMsg,
-              code: "VERSION_CONFLICT",
-            },
-            { status: 409 }
-          );
-        }
-      } else if (meta.entityType === "recommendation") {
-        const currentRec = await db.recommendation.findUnique({
-          where: { id: meta.entityId },
-        });
-        if (currentRec && currentRec.currentVersion !== meta.entityVersionAtProposal) {
-          const conflictMsg =
-            "Conflito de versão: a recomendação clínica foi alterada por outra operação.";
-
-          await db.$transaction(async (tx) => {
-            await tx.aiToolExecution.update({
-              where: { id: execution.id },
-              data: {
-                status: "FAILED",
-                errorCode: "VERSION_CONFLICT",
-                errorMessage: conflictMsg,
-                completedAt: new Date(),
-              },
-            });
-
-            await syncMessageToolExecution(tx, {
-              conversationId: execution.conversationId,
-              messageId: execution.messageId,
-              executionId: execution.id,
-              toolCallId: execution.toolCallId,
-              action: "conflict",
-              errorCode: "VERSION_CONFLICT",
-              errorMessage: conflictMsg,
-            });
-          });
-
-          return NextResponse.json(
-            {
-              error: conflictMsg,
-              code: "VERSION_CONFLICT",
-            },
-            { status: 409 }
-          );
+          };
         }
       }
-    }
 
-    // Action == approve -> Execute domain service safely!
-    let outputResult: any = null;
+      // 2. Re-check Optimistic Concurrency / Version Conflict inside transaction
+      if (meta?.entityVersionAtProposal !== undefined && meta?.entityId) {
+        if (meta.entityType === "medication") {
+          const currentMed = await tx.medication.findUnique({
+            where: { id: meta.entityId },
+            include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
+          });
+          const currentVersion = currentMed?.versions[0]?.versionNumber;
+          if (currentVersion !== undefined && currentVersion !== meta.entityVersionAtProposal) {
+            const conflictMsg = `Conflito de versão: este medicamento foi alterado (v${meta.entityVersionAtProposal} → v${currentVersion}) após a criação da proposta. Gere uma nova proposta.`;
 
-    if (execution.toolName === "healthvault_create_medication") {
-      const created = await MedicationService.create(user!.userId, {
-        name: args.name,
-        genericName: args.generic_name,
-        category: args.category,
-        form: args.form,
-        doseValue: args.dose_value,
-        doseUnit: args.dose_unit,
-        frequency: args.frequency,
-        schedule: args.schedule,
-        changeReason: args.reason || "Aprovado manualmente pelo usuário",
-        conversationId: execution.conversationId,
-        actorType: ActorType.USER,
-        actorName: user!.username,
-        informationOrigin: "USER_REPORTED",
-      });
-      outputResult = { entity: "medication", id: created.id, name: created.name, version: 1 };
-    } else if (execution.toolName === "healthvault_update_medication") {
-      let med = await MedicationService.getById(user!.userId, args.medication_id);
-      if (!med) med = await MedicationService.findByName(user!.userId, args.medication_id);
-      if (!med) throw new Error("Medicamento associado não encontrado.");
+            await tx.aiToolExecution.update({
+              where: { id: execution.id },
+              data: {
+                status: "FAILED",
+                errorCode: "VERSION_CONFLICT",
+                errorMessage: conflictMsg,
+                completedAt: new Date(),
+              },
+            });
 
-      const updatedMed = await MedicationService.updateDose(user!.userId, {
-        medicationId: med.id,
-        doseValue: args.dose_value,
-        doseUnit: args.dose_unit,
-        frequency: args.frequency,
-        schedule: args.schedule,
-        changeReason: args.reason || "Ajuste aprovado pelo usuário",
-        conversationId: execution.conversationId,
-        actorType: ActorType.USER,
-        actorName: user!.username,
-        informationOrigin: "USER_REPORTED",
-      });
-      outputResult = { entity: "medication", id: med.id, name: med.name, version: updatedMed.version.versionNumber };
-    } else if (execution.toolName === "healthvault_update_diet") {
-      const updatedDiet = await DietService.update(user!.userId, {
-        targetCalories: args.target_calories,
-        targetProteinG: args.target_protein_g,
-        targetCarbsG: args.target_carbs_g,
-        targetFatG: args.target_fat_g,
-        changeReason: args.reason || "Ajuste nutricional aprovado pelo usuário",
-        conversationId: execution.conversationId,
-        informationOrigin: "USER_REPORTED",
-      });
-      outputResult = { entity: "diet", version: updatedDiet.version.versionNumber, calories: args.target_calories };
-    } else if (execution.toolName === "healthvault_add_lab_result") {
-      const lab = await HealthService.addLabResult(user!.userId, {
-        testName: args.test_name,
-        markerName: args.marker_name,
-        resultValue: args.result_value,
-        unit: args.unit,
-        referenceRangeLow: args.reference_range_low,
-        referenceRangeHigh: args.reference_range_high,
-        conversationId: execution.conversationId,
-      });
-      outputResult = { entity: "lab", id: lab.id, marker: lab.markerName };
-    } else if (execution.toolName === "healthvault_update_recommendation") {
-      const existing = await db.recommendation.findFirst({
-        where: { id: args.recommendation_id, userId: user!.userId },
-        include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
-      });
-      if (existing) {
-        const updated = await RecommendationService.update(user!.userId, {
-          recommendationId: existing.id,
-          title: args.title,
-          notes: args.notes,
-          summarySnapshot: (existing.versions[0]?.summarySnapshot as any) || {},
-          changeReason: args.reason || "Aprovado pelo usuário",
+            await syncMessageToolExecution(tx, {
+              conversationId: execution.conversationId,
+              messageId: execution.messageId,
+              executionId: execution.id,
+              toolCallId: execution.toolCallId,
+              action: "conflict",
+              errorCode: "VERSION_CONFLICT",
+              errorMessage: conflictMsg,
+            });
+
+            return {
+              type: "CONFLICT" as const,
+              error: conflictMsg,
+              code: "VERSION_CONFLICT",
+            };
+          }
+        } else if (meta.entityType === "diet") {
+          const currentDiet = await tx.dietPlan.findUnique({
+            where: { id: meta.entityId },
+          });
+          if (currentDiet && currentDiet.currentVersion !== meta.entityVersionAtProposal) {
+            const conflictMsg = `Conflito de versão: o plano alimentar mudou (v${meta.entityVersionAtProposal} → v${currentDiet.currentVersion}) desde a geração desta sugestão.`;
+
+            await tx.aiToolExecution.update({
+              where: { id: execution.id },
+              data: {
+                status: "FAILED",
+                errorCode: "VERSION_CONFLICT",
+                errorMessage: conflictMsg,
+                completedAt: new Date(),
+              },
+            });
+
+            await syncMessageToolExecution(tx, {
+              conversationId: execution.conversationId,
+              messageId: execution.messageId,
+              executionId: execution.id,
+              toolCallId: execution.toolCallId,
+              action: "conflict",
+              errorCode: "VERSION_CONFLICT",
+              errorMessage: conflictMsg,
+            });
+
+            return {
+              type: "CONFLICT" as const,
+              error: conflictMsg,
+              code: "VERSION_CONFLICT",
+            };
+          }
+        } else if (meta.entityType === "recommendation") {
+          const currentRec = await tx.recommendation.findUnique({
+            where: { id: meta.entityId },
+          });
+          if (currentRec && currentRec.currentVersion !== meta.entityVersionAtProposal) {
+            const conflictMsg =
+              "Conflito de versão: a recomendação clínica foi alterada por outra operação.";
+
+            await tx.aiToolExecution.update({
+              where: { id: execution.id },
+              data: {
+                status: "FAILED",
+                errorCode: "VERSION_CONFLICT",
+                errorMessage: conflictMsg,
+                completedAt: new Date(),
+              },
+            });
+
+            await syncMessageToolExecution(tx, {
+              conversationId: execution.conversationId,
+              messageId: execution.messageId,
+              executionId: execution.id,
+              toolCallId: execution.toolCallId,
+              action: "conflict",
+              errorCode: "VERSION_CONFLICT",
+              errorMessage: conflictMsg,
+            });
+
+            return {
+              type: "CONFLICT" as const,
+              error: conflictMsg,
+              code: "VERSION_CONFLICT",
+            };
+          }
+        }
+      }
+
+      // 3. Execute domain mutation using tx!
+      let outputResult: any = null;
+
+      if (execution.toolName === "healthvault_create_medication") {
+        const created = await MedicationService.create(user!.userId, {
+          name: args.name,
+          genericName: args.generic_name,
+          category: args.category,
+          form: args.form,
+          doseValue: args.dose_value,
+          doseUnit: args.dose_unit,
+          frequency: args.frequency,
+          schedule: args.schedule,
+          changeReason: args.reason || "Aprovado manualmente pelo usuário",
           conversationId: execution.conversationId,
           actorType: ActorType.USER,
+          actorName: user!.username,
           informationOrigin: "USER_REPORTED",
-        });
-        outputResult = { entity: "recommendation", id: updated.id, version: updated.currentVersion };
-      }
-    }
+        }, tx);
+        outputResult = { entity: "medication", id: created.id, name: created.name, version: 1 };
+      } else if (execution.toolName === "healthvault_update_medication") {
+        let med = await MedicationService.getById(user!.userId, args.medication_id, tx);
+        if (!med) med = await MedicationService.findByName(user!.userId, args.medication_id, tx);
+        if (!med) throw new Error("Medicamento associado não encontrado.");
 
-    // Mark as EXECUTED
-    // Mark as EXECUTED in atomic transaction with Message metadata update
-    await db.$transaction(async (tx) => {
+        const updatedMed = await MedicationService.updateDose(user!.userId, {
+          medicationId: med.id,
+          doseValue: args.dose_value,
+          doseUnit: args.dose_unit,
+          frequency: args.frequency,
+          schedule: args.schedule,
+          changeReason: args.reason || "Ajuste aprovado pelo usuário",
+          conversationId: execution.conversationId,
+          actorType: ActorType.USER,
+          actorName: user!.username,
+          informationOrigin: "USER_REPORTED",
+        }, tx);
+        outputResult = { entity: "medication", id: med.id, name: med.name, version: updatedMed.version.versionNumber };
+      } else if (execution.toolName === "healthvault_update_diet") {
+        const updatedDiet = await DietService.update(user!.userId, {
+          targetCalories: args.target_calories,
+          targetProteinG: args.target_protein_g,
+          targetCarbsG: args.target_carbs_g,
+          targetFatG: args.target_fat_g,
+          changeReason: args.reason || "Ajuste nutricional aprovado pelo usuário",
+          conversationId: execution.conversationId,
+          informationOrigin: "USER_REPORTED",
+        }, tx);
+        outputResult = { entity: "diet", id: updatedDiet.plan.id, version: updatedDiet.version.versionNumber };
+      } else if (execution.toolName === "healthvault_add_lab") {
+        const lab = await HealthService.addLabResult(user!.userId, {
+          testName: args.test_name,
+          category: args.category,
+          markerName: args.marker_name,
+          resultValue: args.result_value,
+          unit: args.unit,
+          referenceRangeLow: args.reference_range_low,
+          referenceRangeHigh: args.reference_range_high,
+          notes: args.notes,
+          conversationId: execution.conversationId,
+        }, tx);
+        outputResult = { entity: "lab", id: lab.id, markerName: lab.markerName, value: `${lab.resultValue} ${lab.unit}` };
+      } else if (execution.toolName === "healthvault_update_recommendation") {
+        const existing = await tx.recommendation.findFirst({
+          where: { id: args.recommendation_id, userId: user!.userId },
+          include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
+        });
+        if (existing) {
+          const updated = await RecommendationService.update(user!.userId, {
+            recommendationId: existing.id,
+            title: args.title,
+            notes: args.notes,
+            summarySnapshot: (existing.versions[0]?.summarySnapshot as any) || {},
+            changeReason: args.reason || "Aprovado pelo usuário",
+            conversationId: execution.conversationId,
+            actorType: ActorType.USER,
+            informationOrigin: "USER_REPORTED",
+          }, tx);
+          outputResult = { entity: "recommendation", id: updated.id, version: updated.currentVersion };
+        }
+      }
+
+      // 4. Mark as EXECUTED in tx
       await tx.aiToolExecution.update({
         where: { id: execution.id },
         data: {
@@ -469,6 +447,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         },
       });
 
+      // 5. Update Message.metadata in tx (throws if message or tool execution not matched!)
       await syncMessageToolExecution(tx, {
         conversationId: execution.conversationId,
         messageId: execution.messageId,
@@ -477,17 +456,44 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         action: "approve",
         outputResult,
       });
+
+      return {
+        type: "SUCCESS" as const,
+        outputResult,
+      };
     });
+
+    if (txResult.type === "EXPIRED") {
+      await logAudit({
+        userId: user!.userId,
+        action: "AI_TOOL_PROPOSAL_EXPIRED",
+        entity: "AI_TOOL_EXECUTION",
+        entityId: execution.id,
+        metadata: { toolName: execution.toolName, expiredAt: meta?.expiresAt },
+      });
+      return NextResponse.json({ error: txResult.error, code: txResult.code }, { status: 410 });
+    }
+
+    if (txResult.type === "CONFLICT") {
+      await logAudit({
+        userId: user!.userId,
+        action: "AI_TOOL_VERSION_CONFLICT",
+        entity: "AI_TOOL_EXECUTION",
+        entityId: execution.id,
+        metadata: { toolName: execution.toolName, proposalVersion: meta?.entityVersionAtProposal },
+      });
+      return NextResponse.json({ error: txResult.error, code: txResult.code }, { status: 409 });
+    }
 
     await logAudit({
       userId: user!.userId,
       action: "AI_TOOL_APPROVED",
       entity: "AI_TOOL_EXECUTION",
       entityId: execution.id,
-      metadata: { toolName: execution.toolName, result: outputResult },
+      metadata: { toolName: execution.toolName, result: txResult.outputResult },
     });
 
-    return NextResponse.json({ success: true, status: "EXECUTED", result: outputResult });
+    return NextResponse.json({ success: true, status: "EXECUTED", result: txResult.outputResult });
   } catch (error: any) {
     console.error("Approve execution error:", error);
     return NextResponse.json({ error: error?.message || "Failed to approve tool execution" }, { status: 500 });

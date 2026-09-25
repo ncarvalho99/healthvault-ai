@@ -130,8 +130,9 @@ export class RecommendationService {
     return recommendation;
   }
 
-  static async update(userId: string, input: UpdateRecommendationInput) {
-    const existing = await db.recommendation.findFirst({
+  static async update(userId: string, input: UpdateRecommendationInput, txClient?: any) {
+    const client = txClient || db;
+    const existing = await client.recommendation.findFirst({
       where: { id: input.recommendationId, userId },
     });
 
@@ -142,7 +143,7 @@ export class RecommendationService {
     const nextVersionNumber = existing.currentVersion + 1;
     const finalStatus = input.status || existing.status;
 
-    const updated = await db.$transaction(async (tx) => {
+    const runInTx = async (tx: any) => {
       await tx.recommendationVersion.create({
         data: {
           recommendationId: existing.id,
@@ -167,7 +168,9 @@ export class RecommendationService {
           updatedAt: new Date(),
         },
       });
-    });
+    };
+
+    const updated = txClient ? await runInTx(txClient) : await db.$transaction(runInTx);
 
     await logAudit({
       userId,

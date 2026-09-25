@@ -91,14 +91,15 @@ export class DietService {
     return diet;
   }
 
-  static async update(userId: string, input: UpdateDietInput) {
+  static async update(userId: string, input: UpdateDietInput, txClient?: any) {
+    const client = txClient || db;
     let plan = input.dietPlanId
-      ? await db.dietPlan.findFirst({ where: { id: input.dietPlanId, userId } })
-      : await db.dietPlan.findFirst({ where: { userId, isActive: true }, orderBy: { updatedAt: "desc" } });
+      ? await client.dietPlan.findFirst({ where: { id: input.dietPlanId, userId } })
+      : await client.dietPlan.findFirst({ where: { userId, isActive: true }, orderBy: { updatedAt: "desc" } });
 
     if (!plan) {
       // Auto-create base plan if none exists
-      plan = await db.dietPlan.create({
+      plan = await client.dietPlan.create({
         data: {
           userId,
           title: "Plano Nutricional Principal",
@@ -110,7 +111,7 @@ export class DietService {
 
     const nextVersionNumber = plan.currentVersion + 1;
 
-    const result = await db.$transaction(async (tx) => {
+    const runInTx = async (tx: any) => {
       const ver = await tx.dietVersion.create({
         data: {
           dietPlanId: plan.id,
@@ -134,7 +135,9 @@ export class DietService {
       });
 
       return { plan: updatedPlan, version: ver };
-    });
+    };
+
+    const result = txClient ? await runInTx(txClient) : await db.$transaction(runInTx);
 
     await logAudit({
       userId,
