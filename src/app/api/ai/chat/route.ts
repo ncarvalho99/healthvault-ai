@@ -329,6 +329,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
           vaultBlock?.match(/(\d+(?:\.\d+)?)\s*kg/i);
         const vaultWeightKg = weightMatch ? parseFloat(weightMatch[1]) : null;
         const lastAssistantMsg = [...contextMessages].reverse().find((m) => m.role === "assistant")?.content;
+        const lastUserMsg = [...contextMessages].reverse().find((m) => m.role === "user" && m.content !== content)?.content;
 
         // Order tool calls deterministically: metrics -> meds -> diet -> recommendations
         const toolDependencyPriority = (name: string) => {
@@ -358,6 +359,8 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
             agentMode,
             userMessage: content,
             previousAssistantMessage: lastAssistantMsg,
+            previousUserMessage: lastUserMsg,
+            conversationHistory: contextMessages,
             vaultWeightKg,
           });
 

@@ -60,6 +60,8 @@ export class ToolDispatcher {
       const intentCheck = WriteIntentGuard.check({
         userMessage: context.userMessage,
         previousAssistantMessage: context.previousAssistantMessage,
+        previousUserMessage: context.previousUserMessage,
+        conversationHistory: context.conversationHistory,
         toolName,
         toolAccess: tool.access,
         toolCategory: tool.category,

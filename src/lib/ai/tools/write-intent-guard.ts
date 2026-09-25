@@ -2,13 +2,15 @@
  * WriteIntentGuard
  *
  * Deterministic server-side guard that distinguishes advisory/generative requests
- * from persistent mutation intent, preventing accidental database mutations
- * on prompts like "monte uma dieta...", "recomende opções...", etc.
+ * from persistent mutation intent, enforcing confirmation binding and persisting
+ * baseline conflicts across dialogue turns.
  */
 
 export interface WriteIntentCheckOptions {
   userMessage?: string;
   previousAssistantMessage?: string;
+  previousUserMessage?: string;
+  conversationHistory?: Array<{ role: string; content?: string | null }>;
   toolName: string;
   toolAccess?: string;
   toolCategory?: string;
@@ -29,12 +31,12 @@ const ADVISORY_PATTERNS = [
 const EXPLICIT_MUTATION_PATTERNS = [
   /\b(registre|registrar|grave|gravar|salve|salvar|adicione|adicionar|atualize|atualizar|altere|alterar|modifique|modificar|mude|mudar|troque|trocar|pare|parar|suspenda|suspender|descontinue|descontinuar|interrompa|interromper|aplique|aplicar|cadastre|cadastrar|defina|definir|coloque|colocar|insira|inserir|delete|deletar|exclua|excluir|remova|remover|anote|anotar|guarde|guardar)\b/i,
   /\b(save|record|update|change|stop|discontinue|apply|set|add|register|delete|remove|modify)\b/i,
-  /\b(minha\s+nova\s+dieta\s+[eé]|meu\s+novo\s+peso\s+[eé]|nova\s+dose\s+[eé]|quero\s+salvar|pode\s+salvar|pode\s+gravar|por\s+favor\s+salve)\b/i,
+  /\b(minha\s+nova\s+dieta\s+[eé]|meu\s+novo\s+peso\s+[eé]|nova\s+dose\s+[eé]|quero\s+salvar|pode\s+salvar|pode\s+gravar|pode\s+registrar|pode\s+atualizar|por\s+favor\s+salve)\b/i,
+  /\b(sim,\s*(salve|grave|registre|atualize|pode\s+salvar|aplique))\b/i,
 ];
 
-const CONFIRMATION_PATTERNS = [
-  /^(sim|pode|pode\s+salvar|pode\s+gravar|pode\s+registrar|pode\s+atualizar|pode\s+aplicar|salve|grave|registre|confirmo|confirmar|quero|quero\s+salvar|ok,\s*salve|por\s+favor\s*salve|com\s+certeza|fa[cç]a\s+isso|yes|confirm|please\s+save|go\s+ahead)[\s.!,]*$/i,
-  /\b(sim,\s*(salve|grave|registre|atualize|pode\s+salvar|aplique))\b/i,
+const GENERIC_AFFIRMATIVE_PATTERNS = [
+  /^(sim|ok|pode|confirmo|confirmar|quero|com\s+certeza|fa[cç]a\s+isso|yes|confirm|go\s+ahead)[\s.!,]*$/i,
 ];
 
 const PREVIOUS_ASSISTANT_OFFER_SAVE_PATTERNS = [
@@ -42,6 +44,60 @@ const PREVIOUS_ASSISTANT_OFFER_SAVE_PATTERNS = [
   /(?:salvar|gravar|registrar|aplicar)\s+(?:este|esse|o)\s+plano/i,
   /(?:would\s+you\s+like\s+me\s+to|should\s+I)\s+(?:save|record|apply|register)/i,
 ];
+
+function findDialogueReportedWeight(
+  userMessage: string,
+  previousUserMessage?: string,
+  previousAssistantMessage?: string,
+  history?: Array<{ role: string; content?: string | null }>
+): number | null {
+  // 1. Current user message
+  const matchCurrent =
+    userMessage.match(/\b(?:estou\s+com|peso\s+(?:de\s+)?|pesando\s+|com\s+)(\d+(?:[.,]\d+)?)\s*kg\b/i) ||
+    userMessage.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/i);
+  if (matchCurrent) {
+    const val = parseFloat(matchCurrent[1].replace(",", "."));
+    if (!isNaN(val)) return val;
+  }
+
+  // 2. Previous user message
+  if (previousUserMessage) {
+    const matchPrev =
+      previousUserMessage.match(/\b(?:estou\s+com|peso\s+(?:de\s+)?|pesando\s+|com\s+)(\d+(?:[.,]\d+)?)\s*kg\b/i) ||
+      previousUserMessage.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/i);
+    if (matchPrev) {
+      const val = parseFloat(matchPrev[1].replace(",", "."));
+      if (!isNaN(val)) return val;
+    }
+  }
+
+  // 3. Previous assistant message referencing reported weight
+  if (previousAssistantMessage) {
+    const matchAssist = previousAssistantMessage.match(/\b(?:mencionou|informou|disse)\s+(\d+(?:[.,]\d+)?)\s*kg/i);
+    if (matchAssist) {
+      const val = parseFloat(matchAssist[1].replace(",", "."));
+      if (!isNaN(val)) return val;
+    }
+  }
+
+  // 4. History
+  if (history && history.length > 0) {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (msg.role === "user" && msg.content) {
+        const m =
+          msg.content.match(/\b(?:estou\s+com|peso\s+(?:de\s+)?|pesando\s+|com\s+)(\d+(?:[.,]\d+)?)\s*kg\b/i) ||
+          msg.content.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/i);
+        if (m) {
+          const val = parseFloat(m[1].replace(",", "."));
+          if (!isNaN(val)) return val;
+        }
+      }
+    }
+  }
+
+  return null;
+}
 
 export class WriteIntentGuard {
   /**
@@ -52,6 +108,8 @@ export class WriteIntentGuard {
     const {
       userMessage,
       previousAssistantMessage = "",
+      previousUserMessage,
+      conversationHistory,
       toolName,
       toolAccess,
       vaultWeightKg,
@@ -76,50 +134,60 @@ export class WriteIntentGuard {
       };
     }
 
-    // 2. Check confirmation to a previous assistant offer to save/persist
-    const isConfirmation = CONFIRMATION_PATTERNS.some((p) => p.test(trimmedUser));
-    const previousOfferedSave = PREVIOUS_ASSISTANT_OFFER_SAVE_PATTERNS.some((p) =>
-      p.test(previousAssistantMessage)
-    );
-
-    if (isConfirmation || (previousOfferedSave && /^(sim|pode|ok|confirmo|quero)[\s.!,]*$/i.test(trimmedUser))) {
-      return { allowed: true, intent: "CONFIRMATION" };
-    }
-
-    // 3. Check for Material Baseline Conflict in Weight
+    // 2. Check for Material Baseline Conflict in Weight across turns
     // If user self-reported a weight that materially differs from Vault (> 4 kg), and tool is diet/recommendation write:
     if (
       typeof vaultWeightKg === "number" &&
       vaultWeightKg > 0 &&
       (toolName.includes("diet") || toolName.includes("recommendation"))
     ) {
-      const weightMatch = trimmedUser.match(/\b(?:estou\s+com|peso\s+(?:de\s+)?|pesando\s+|com\s+)(\d+(?:[.,]\d+)?)\s*kg\b/i) ||
-                          trimmedUser.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/i);
+      const reportedWeight = findDialogueReportedWeight(
+        trimmedUser,
+        previousUserMessage,
+        previousAssistantMessage,
+        conversationHistory
+      );
 
-      if (weightMatch) {
-        const reportedWeight = parseFloat(weightMatch[1].replace(",", "."));
-        if (!isNaN(reportedWeight) && Math.abs(reportedWeight - vaultWeightKg) >= 4.0) {
-          // If the user did NOT explicitly instruct to update weight ("atualize meu peso para X"),
-          // block persistent downstream mutations until discrepancy is resolved.
-          const explicitlyUpdatingWeight =
-            /(?:atualiz\w*|mud\w*|alter\w*|registr\w*|salv\w*)\s+(?:meu\s+)?peso/i.test(trimmedUser);
+      if (reportedWeight !== null && Math.abs(reportedWeight - vaultWeightKg) >= 4.0) {
+        // Did user explicitly instruct to resolve/register this weight?
+        // e.g. "sim, considere 98 kg como meu peso atual e registre isso", "atualize meu peso para 98 kg"
+        const explicitlyResolvingWeight =
+          /(?:considere\s+\d+|atualiz\w*|mud\w*|alter\w*|registr\w*|salv\w*)\s+(?:meu\s+)?peso/i.test(trimmedUser) ||
+          /(?:considere\s+\d+\s*kg.*?(?:peso|registre|salve))/i.test(trimmedUser);
 
-          if (!explicitlyUpdatingWeight) {
-            return {
-              allowed: false,
-              intent: "BASELINE_CONFLICT",
-              reason: `BASELINE_CONFLICT: Conflito material entre o peso informado no chat (${reportedWeight} kg) e o último peso registrado no HealthVault (${vaultWeightKg} kg). Apresente a proposta usando o dado informado como suposição temporária e solicite confirmação antes de gravar no prontuário.`,
-            };
-          }
+        if (!explicitlyResolvingWeight) {
+          return {
+            allowed: false,
+            intent: "BASELINE_CONFLICT",
+            reason: `BASELINE_CONFLICT: Conflito material entre o peso informado no diálogo (${reportedWeight} kg) e o último peso registrado no HealthVault (${vaultWeightKg} kg) ainda não foi resolvido. Confirme explicitamente a atualização do peso no prontuário (ex: 'sim, considere ${reportedWeight} kg como meu peso atual e registre isso') antes de persistir dieta ou recomendação.`,
+          };
         }
       }
     }
 
-    // 4. Check explicit mutation intent
+    // 3. Check for Generic Affirmative Confirmation (sim, ok, pode, confirmo)
+    const isGenericAffirmative = GENERIC_AFFIRMATIVE_PATTERNS.some((p) => p.test(trimmedUser));
+    const previousOfferedSave = PREVIOUS_ASSISTANT_OFFER_SAVE_PATTERNS.some((p) =>
+      p.test(previousAssistantMessage)
+    );
+
+    if (isGenericAffirmative) {
+      if (previousOfferedSave) {
+        return { allowed: true, intent: "CONFIRMATION" };
+      } else {
+        return {
+          allowed: false,
+          intent: "NO_WRITE_INTENT",
+          reason: `WRITE_INTENT_REQUIRED: Resposta afirmativa genérica ('${trimmedUser}') sem oferta prévia de persistência no HealthVault não autoriza gravação persistente.`,
+        };
+      }
+    }
+
+    // 4. Check explicit mutation intent (salve, registre, atualize, mude, pare, etc.)
     const hasExplicitMutation = EXPLICIT_MUTATION_PATTERNS.some((p) => p.test(trimmedUser));
     const hasAdvisory = ADVISORY_PATTERNS.some((p) => p.test(trimmedUser));
 
-    // If explicit mutation directive is present (e.g. "atualize minha dieta", "registre meu peso", "pare meu medicamento", "salve o plano"):
+    // If explicit mutation directive is present:
     if (hasExplicitMutation) {
       return { allowed: true, intent: "EXPLICIT_MUTATION" };
     }

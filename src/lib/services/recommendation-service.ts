@@ -23,9 +23,9 @@ export interface UpdateRecommendationInput {
   title?: string;
   status?: RecommendationStatus;
   notes?: string;
-  summarySnapshot: Record<string, any>;
+  summarySnapshot?: Record<string, any>;
   changeReason: string;
-  conversationId?: string;
+  conversationId?: string | null;
   actorType?: ActorType;
   actorName?: string;
   informationOrigin?: string;
@@ -98,10 +98,8 @@ export class RecommendationService {
         },
       });
 
-      const finalSnapshot =
-        input.summarySnapshot && Object.keys(input.summarySnapshot).length > 0
-          ? input.summarySnapshot
-          : await RecommendationSnapshotBuilder.build(userId, tx);
+      // Server-side authoritative snapshot built strictly from current Vault state
+      const finalSnapshot = await RecommendationSnapshotBuilder.build(userId, tx);
 
       await tx.recommendationVersion.create({
         data: {
@@ -152,10 +150,8 @@ export class RecommendationService {
     const finalStatus = input.status || existing.status;
 
     const runInTx = async (tx: any) => {
-      const finalSnapshot =
-        input.summarySnapshot && Object.keys(input.summarySnapshot).length > 0
-          ? input.summarySnapshot
-          : await RecommendationSnapshotBuilder.build(userId, tx);
+      // Server-side authoritative snapshot built strictly from current Vault state
+      const finalSnapshot = await RecommendationSnapshotBuilder.build(userId, tx);
 
       await tx.recommendationVersion.create({
         data: {

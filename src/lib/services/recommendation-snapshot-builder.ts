@@ -32,7 +32,7 @@ export class RecommendationSnapshotBuilder {
    * (diet, medications, metrics) at the exact moment a recommendation version is committed.
    */
   static async build(userId: string, txClient?: any): Promise<RecommendationSummarySnapshot> {
-    const client = txClient || db;
+    const client = (txClient && txClient.dietPlan) ? txClient : db;
 
     // 1. Current active Diet Plan & latest version
     let activeDiet = null;
@@ -108,7 +108,7 @@ export class RecommendationSnapshotBuilder {
     const metricsSnapshot = latestMetric
       ? {
           latestWeightKg: latestMetric.weightKg,
-          bodyFatPct: latestMetric.bodyFatPercentage,
+          bodyFatPct: latestMetric.bodyFatPct !== undefined ? latestMetric.bodyFatPct : (latestMetric as any).bodyFatPercentage,
           date:
             latestMetric.date instanceof Date
               ? latestMetric.date.toISOString().split("T")[0]

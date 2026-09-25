@@ -29,6 +29,8 @@ export interface ToolExecutionContext {
   agentMode?: "AGENT" | "CHAT_ONLY" | "MANUAL";
   userMessage?: string;
   previousAssistantMessage?: string;
+  previousUserMessage?: string;
+  conversationHistory?: Array<{ role: string; content?: string | null }>;
   vaultWeightKg?: number | null;
 }
 

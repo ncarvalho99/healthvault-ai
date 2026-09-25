@@ -3,13 +3,14 @@ import { z } from "zod";
 import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { RecommendationService } from "@/lib/services/recommendation-service";
 import { RecommendationStatus, ActorType } from "@prisma/client";
 
 const updateRecommendationSchema = z.object({
   title: z.string().min(1).optional(),
   status: z.nativeEnum(RecommendationStatus).optional(),
   notes: z.string().optional(),
-  summarySnapshot: z.record(z.any()),
+  summarySnapshot: z.record(z.any()).optional(),
   changeReason: z.string().min(1, "Change reason is required to maintain clinical audit trail"),
   conversationId: z.string().uuid().optional(),
   actorType: z.nativeEnum(ActorType).default(ActorType.USER),
@@ -85,39 +86,16 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     const nextVersion = existing.currentVersion + 1;
     const finalStatus = status || existing.status;
 
-    // Execute atomic update: update recommendation record & create new immutable version
-    const updated = await db.$transaction(async (tx) => {
-      // 1. Create new immutable version row
-      await tx.recommendationVersion.create({
-        data: {
-          recommendationId: existing.id,
-          versionNumber: nextVersion,
-          status: finalStatus,
-          summarySnapshot: summarySnapshot as any,
-          changeReason,
-          conversationId: conversationId || existing.conversationId,
-          actorType,
-          actorName: actorName || user!.username,
-        },
-      });
-
-      // 2. Update recommendation summary pointer
-      return tx.recommendation.update({
-        where: { id: existing.id },
-        data: {
-          title: title || existing.title,
-          status: finalStatus,
-          notes: notes !== undefined ? notes : existing.notes,
-          currentVersion: nextVersion,
-          updatedAt: new Date(),
-        },
-        include: {
-          versions: {
-            orderBy: { versionNumber: "desc" },
-            take: 2,
-          },
-        },
-      });
+    // Execute atomic update: update recommendation record & create new immutable version using server-side snapshot
+    const updated = await RecommendationService.update(user!.userId, {
+      recommendationId: existing.id,
+      title,
+      status: finalStatus,
+      notes,
+      changeReason,
+      conversationId: conversationId || existing.conversationId,
+      actorType,
+      actorName: actorName || user!.username,
     });
 
     await logAudit({

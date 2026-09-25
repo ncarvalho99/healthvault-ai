@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { RecommendationService } from "@/lib/services/recommendation-service";
 import { RecommendationStatus, SourceType, ActorType } from "@prisma/client";
 
 const createRecommendationSchema = z.object({
@@ -82,36 +83,17 @@ export async function POST(req: NextRequest) {
       changeReason,
     } = result.data;
 
-    // Use transaction to create Recommendation AND Version 1 atomically
-    const recommendation = await db.$transaction(async (tx) => {
-      const rec = await tx.recommendation.create({
-        data: {
-          userId: user!.userId,
-          conversationId,
-          title,
-          status,
-          sourceType,
-          sourceName,
-          aiModel,
-          notes,
-          currentVersion: 1,
-        },
-      });
-
-      await tx.recommendationVersion.create({
-        data: {
-          recommendationId: rec.id,
-          versionNumber: 1,
-          status,
-          summarySnapshot: summarySnapshot as any,
-          changeReason,
-          conversationId,
-          actorType: sourceType === SourceType.AI_AGENT ? ActorType.AI : ActorType.USER,
-          actorName: sourceName || user!.username,
-        },
-      });
-
-      return rec;
+    // Create Recommendation AND Version 1 using central service and authoritative server-side snapshot
+    const recommendation = await RecommendationService.create(user!.userId, {
+      conversationId,
+      title,
+      status,
+      sourceType,
+      sourceName,
+      aiModel,
+      notes,
+      changeReason,
+      actorName: sourceName || user!.username,
     });
 
     await logAudit({

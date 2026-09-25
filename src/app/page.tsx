@@ -27,6 +27,7 @@ export default function DashboardPage() {
     recommendations: any[];
     metrics: any[];
     events: any[];
+    reminders: any[];
   }>({
     medications: [],
     dietPlans: [],
@@ -34,6 +35,7 @@ export default function DashboardPage() {
     recommendations: [],
     metrics: [],
     events: [],
+    reminders: [],
   });
 
   useEffect(() => {
@@ -44,8 +46,9 @@ export default function DashboardPage() {
       fetch("/api/recommendations").then((r) => r.json()),
       fetch("/api/health/metrics").then((r) => r.json()),
       fetch("/api/timeline").then((r) => r.json()),
+      fetch("/api/reminders").then((r) => r.json()).catch(() => ({ reminders: [] })),
     ])
-      .then(([meds, diets, convs, recs, metrics, timeline]) => {
+      .then(([meds, diets, convs, recs, metrics, timeline, rems]) => {
         setData({
           medications: meds.medications || [],
           dietPlans: diets.dietPlans || [],
@@ -53,6 +56,7 @@ export default function DashboardPage() {
           recommendations: recs.recommendations || [],
           metrics: metrics.metrics || [],
           events: timeline.events || [],
+          reminders: rems.reminders || [],
         });
         setLoading(false);
       })
@@ -67,6 +71,20 @@ export default function DashboardPage() {
   const activeDiet = data.dietPlans[0] || null;
   const latestDietVer = activeDiet?.versions?.[0] || null;
   const latestMetric = data.metrics[0] || null;
+  const nextReminder = data.reminders[0] || null;
+
+  const daysUntilReminder = nextReminder
+    ? Math.ceil((new Date(nextReminder.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null;
+  const displaySchedule =
+    nextReminder !== null
+      ? daysUntilReminder! <= 0
+        ? "Hoje"
+        : daysUntilReminder === 1
+        ? "Amanhã"
+        : `Em ${daysUntilReminder} dias`
+      : "--";
+  const displayReason = nextReminder ? nextReminder.title : "Nenhuma revisão agendada";
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-slate-950">
@@ -142,10 +160,10 @@ export default function DashboardPage() {
                   <Calendar className="w-4 h-4 text-purple-400" />
                 </div>
                 <div className="text-lg font-bold text-slate-100">
-                  {data.medications.length > 0 ? "Em 14 dias" : "--"}
+                  {displaySchedule}
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  {data.medications.length > 0 ? "Revisão clínica" : "Nenhuma revisão agendada"}
+                  {displayReason}
                 </p>
               </div>
             </div>
