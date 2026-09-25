@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
-import { logAudit } from "@/lib/audit";
 import { RecommendationService } from "@/lib/services/recommendation-service";
 import { RecommendationStatus, SourceType, ActorType } from "@prisma/client";
 
@@ -94,16 +93,8 @@ export async function POST(req: NextRequest) {
       notes,
       changeReason,
       actorName: sourceName || user!.username,
-    });
-
-    await logAudit({
-      userId: user!.userId,
-      action: "RECOMMENDATION_CREATED",
-      entity: "RECOMMENDATION",
-      entityId: recommendation.id,
-      ipAddress: ip,
-      userAgent,
-      metadata: { title, version: 1, status, sourceType },
+      // RecommendationService owns the RECOMMENDATION_CREATED audit
+      auditContext: { ipAddress: ip, userAgent },
     });
 
     return NextResponse.json({ recommendation }, { status: 201 });

@@ -1,3 +1,4 @@
+import type { TurnMutationState } from "./write-intent-guard";
 import { z, ZodSchema } from "zod";
 
 export type ToolCategory =
@@ -32,6 +33,7 @@ export interface ToolExecutionContext {
   previousUserMessage?: string;
   conversationHistory?: Array<{ role: string; content?: string | null }>;
   vaultWeightKg?: number | null;
+  turnMutationState?: TurnMutationState;
 }
 
 export interface ToolExecutionResult {

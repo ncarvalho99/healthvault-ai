@@ -66,6 +66,7 @@ export class ToolDispatcher {
         toolAccess: tool.access,
         toolCategory: tool.category,
         vaultWeightKg: context.vaultWeightKg,
+        turnMutationState: context.turnMutationState,
       });
 
       if (!intentCheck.allowed) {

@@ -3,6 +3,11 @@ import { logAudit } from "../audit";
 import { RecommendationSnapshotBuilder } from "./recommendation-snapshot-builder";
 import { RecommendationStatus, SourceType, ActorType } from "@prisma/client";
 
+export interface RecommendationAuditContext {
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
 export interface CreateRecommendationInput {
   title: string;
   conversationId?: string;
@@ -16,6 +21,7 @@ export interface CreateRecommendationInput {
   actorType?: ActorType;
   actorName?: string;
   informationOrigin?: string;
+  auditContext?: RecommendationAuditContext;
 }
 
 export interface UpdateRecommendationInput {
@@ -29,6 +35,7 @@ export interface UpdateRecommendationInput {
   actorType?: ActorType;
   actorName?: string;
   informationOrigin?: string;
+  auditContext?: RecommendationAuditContext;
 }
 
 export class RecommendationService {
@@ -125,6 +132,8 @@ export class RecommendationService {
       action: "RECOMMENDATION_CREATED",
       entity: "RECOMMENDATION",
       entityId: recommendation.id,
+      ipAddress: input.auditContext?.ipAddress,
+      userAgent: input.auditContext?.userAgent,
       metadata: {
         title: recommendation.title,
         status,
@@ -186,11 +195,14 @@ export class RecommendationService {
       action: "RECOMMENDATION_VERSION_CREATED",
       entity: "RECOMMENDATION",
       entityId: existing.id,
+      ipAddress: input.auditContext?.ipAddress,
+      userAgent: input.auditContext?.userAgent,
       metadata: {
         title: updated.title,
         newVersion: nextVersionNumber,
         reason: input.changeReason,
         actorType: input.actorType,
+        status: finalStatus,
       },
     }, txClient);
 

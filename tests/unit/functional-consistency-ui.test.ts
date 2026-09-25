@@ -67,7 +67,7 @@ describe("HealthVault AI — Functional Consistency & UI Quality Regressions", (
       assert.ok(check.reason?.includes("BASELINE_CONFLICT"));
     });
 
-    it("follow-up explicitly confirming weight update → write allowed", () => {
+    it("follow-up confirming weight update in words only (metric not persisted) → still BASELINE_CONFLICT", () => {
       const check = WriteIntentGuard.check({
         userMessage: "sim, considere 98 kg como meu peso atual e registre isso",
         previousAssistantMessage: "Você mencionou 98 kg — vault registra 85.7 kg. Se o peso atual é de fato 98 kg, me confirma?",
@@ -78,7 +78,23 @@ describe("HealthVault AI — Functional Consistency & UI Quality Regressions", (
         vaultWeightKg: 85.7,
       });
 
-      assert.strictEqual(check.allowed, true, "Explicit resolution of weight conflict must allow write");
+      assert.strictEqual(check.allowed, false, "Wording alone must not resolve the weight conflict");
+      assert.strictEqual(check.intent, "BASELINE_CONFLICT");
+    });
+
+    it("follow-up confirming weight update after metric persisted this turn → write allowed", () => {
+      const check = WriteIntentGuard.check({
+        userMessage: "sim, considere 98 kg como meu peso atual e registre isso",
+        previousAssistantMessage: "Você mencionou 98 kg — vault registra 85.7 kg. Se o peso atual é de fato 98 kg, me confirma?",
+        previousUserMessage: "estou com 98 kg, monte uma dieta",
+        toolName: "healthvault_update_diet",
+        toolAccess: "write",
+        toolCategory: "nutrition",
+        vaultWeightKg: 85.7,
+        turnMutationState: { weightUpdatedThisTurn: true, updatedWeightKg: 98 },
+      });
+
+      assert.strictEqual(check.allowed, true, "Persisted weight resolution must allow write");
       assert.ok(check.intent === "CONFIRMATION" || check.intent === "EXPLICIT_MUTATION");
     });
   });

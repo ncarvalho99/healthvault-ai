@@ -37,38 +37,37 @@ export class ToolSelector {
     const isSymptomTopic = /sintoma|dor|n[aá]usea|rea[cç][aã]o|efeito|azia|cabe[cç]a|fadiga|tontura/i.test(text);
     const isLabTopic = /exame|laborat|sangue|glicemia|colesterol|hba1c|tsh|biomarcador/i.test(text);
 
-    // If a specific topic is detected, return focused tool group to save tokens and avoid LLM hallucinations
-    if (isDietTopic && !isMedTopic) {
-      return availablePool.filter(
-        (t) => baseToolNames.includes(t.name) || t.category === "nutrition" || t.category === "recommendations"
-      );
-    }
+    // Saving a proposed plan/protocol touches diet and recommendation records
+    const isPlanTopic = /plano|protocolo|recomenda[cç]/i.test(text);
 
-    if (isMedTopic && !isDietTopic) {
-      return availablePool.filter(
-        (t) => baseToolNames.includes(t.name) || t.category === "medications" || t.category === "symptoms" || t.category === "recommendations"
-      );
+    // Union of every detected domain, so multi-domain requests (e.g. "atualize meu peso e salve o plano")
+    // receive all the tools they need while unrelated domains stay out of scope
+    const categories = new Set<string>();
+    if (isDietTopic || isPlanTopic) {
+      categories.add("nutrition");
+      categories.add("recommendations");
     }
-
-    if (isMetricTopic && !isDietTopic && !isMedTopic) {
-      return availablePool.filter(
-        (t) => baseToolNames.includes(t.name) || t.category === "metrics"
-      );
+    if (isMedTopic) {
+      categories.add("medications");
+      categories.add("symptoms");
+      categories.add("recommendations");
     }
-
-    if (isSymptomTopic && !isMedTopic) {
-      return availablePool.filter(
-        (t) => baseToolNames.includes(t.name) || t.category === "symptoms" || t.category === "medications"
-      );
+    if (isMetricTopic) {
+      categories.add("metrics");
     }
-
+    if (isSymptomTopic) {
+      categories.add("symptoms");
+      categories.add("medications");
+    }
     if (isLabTopic) {
-      return availablePool.filter(
-        (t) => baseToolNames.includes(t.name) || t.category === "labs"
-      );
+      categories.add("labs");
     }
 
-    // Default: return available pool
+    if (categories.size > 0) {
+      return availablePool.filter((t) => baseToolNames.includes(t.name) || categories.has(t.category));
+    }
+
+    // Default: no topic detected, return available pool
     return availablePool;
   }
 }

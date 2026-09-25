@@ -83,7 +83,6 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       actorName,
     } = result.data;
 
-    const nextVersion = existing.currentVersion + 1;
     const finalStatus = status || existing.status;
 
     // Execute atomic update: update recommendation record & create new immutable version using server-side snapshot
@@ -96,21 +95,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       conversationId: conversationId || existing.conversationId,
       actorType,
       actorName: actorName || user!.username,
-    });
-
-    await logAudit({
-      userId: user!.userId,
-      action: "RECOMMENDATION_VERSION_CREATED",
-      entity: "RECOMMENDATION",
-      entityId: existing.id,
-      ipAddress: ip,
-      userAgent,
-      metadata: {
-        newVersion: nextVersion,
-        reason: changeReason,
-        actorType,
-        status: finalStatus,
-      },
+      // RecommendationService owns the RECOMMENDATION_VERSION_CREATED audit
+      auditContext: { ipAddress: ip, userAgent },
     });
 
     return NextResponse.json({ recommendation: updated });

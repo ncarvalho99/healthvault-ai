@@ -8,6 +8,7 @@ import { ContextBuilder } from "@/lib/ai/context/context-builder";
 import { ToolRegistry } from "@/lib/ai/tools/registry";
 import { ToolSelector } from "@/lib/ai/tools/selector";
 import { ToolDispatcher } from "@/lib/ai/tools/dispatcher";
+import { createTurnMutationState, recordTurnMutation } from "@/lib/ai/tools/write-intent-guard";
 import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
 import { AssistantResponseProcessor } from "@/lib/ai/response/assistant-response-processor";
 import { resolveResearchPolicy as resolveWebResearchPolicy } from "@/lib/ai/research/research-policy";
@@ -254,6 +255,8 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
     const executedToolsList: any[] = [];
     let currentMessages = [...contextMessages];
     const callSignatures = new Set<string>();
+    // Writes persisted during this turn (across tool iterations); resolves weight baseline conflicts by real state
+    const turnMutationState = createTurnMutationState();
     let hasRegeneratedForConsistency = false;
 
     while (iteration < MAX_TOOL_ITERATIONS) {
@@ -362,7 +365,15 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
             previousUserMessage: lastUserMsg,
             conversationHistory: contextMessages,
             vaultWeightKg,
+            turnMutationState,
           });
+
+          recordTurnMutation(turnMutationState, toolName, toolOutput);
+
+          // A call blocked only by an unresolved baseline conflict may be retried after the metric is persisted
+          if (toolOutput.error?.code === "BASELINE_CONFLICT") {
+            callSignatures.delete(`${toolName}:${rawArgs}`);
+          }
 
           executedToolsList.push({
             toolCallId,

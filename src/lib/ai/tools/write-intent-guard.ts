@@ -6,6 +6,39 @@
  * baseline conflicts across dialogue turns.
  */
 
+/**
+ * Mutations already persisted earlier in the current chat turn.
+ * Only successful, non-pending writes update this state.
+ */
+export interface TurnMutationState {
+  weightUpdatedThisTurn: boolean;
+  updatedWeightKg: number | null;
+}
+
+export function createTurnMutationState(): TurnMutationState {
+  return { weightUpdatedThisTurn: false, updatedWeightKg: null };
+}
+
+/**
+ * Records a dispatched tool result into the turn state. A body metric only counts
+ * when it was actually persisted (not failed, not pending manual approval).
+ */
+export function recordTurnMutation(
+  state: TurnMutationState,
+  toolName: string,
+  result: { success: boolean; requires_approval?: boolean; data?: any }
+): void {
+  if (
+    toolName === "healthvault_add_body_metric" &&
+    result.success &&
+    !result.requires_approval &&
+    typeof result.data?.weightKg === "number"
+  ) {
+    state.weightUpdatedThisTurn = true;
+    state.updatedWeightKg = result.data.weightKg;
+  }
+}
+
 export interface WriteIntentCheckOptions {
   userMessage?: string;
   previousAssistantMessage?: string;
@@ -15,6 +48,7 @@ export interface WriteIntentCheckOptions {
   toolAccess?: string;
   toolCategory?: string;
   vaultWeightKg?: number | null;
+  turnMutationState?: TurnMutationState;
 }
 
 export interface WriteIntentCheckResult {
@@ -113,6 +147,7 @@ export class WriteIntentGuard {
       toolName,
       toolAccess,
       vaultWeightKg,
+      turnMutationState,
     } = options;
 
     // 1. Read tools never require write intent
@@ -149,17 +184,18 @@ export class WriteIntentGuard {
       );
 
       if (reportedWeight !== null && Math.abs(reportedWeight - vaultWeightKg) >= 4.0) {
-        // Did user explicitly instruct to resolve/register this weight?
-        // e.g. "sim, considere 98 kg como meu peso atual e registre isso", "atualize meu peso para 98 kg"
-        const explicitlyResolvingWeight =
-          /(?:considere\s+\d+|atualiz\w*|mud\w*|alter\w*|registr\w*|salv\w*)\s+(?:meu\s+)?peso/i.test(trimmedUser) ||
-          /(?:considere\s+\d+\s*kg.*?(?:peso|registre|salve))/i.test(trimmedUser);
+        // The conflict is only resolved by real state: a body metric persisted earlier in this
+        // same turn whose weight matches the reported weight. Wording alone ("registre meu peso") is not proof.
+        const persistedThisTurn =
+          turnMutationState?.weightUpdatedThisTurn === true &&
+          typeof turnMutationState.updatedWeightKg === "number" &&
+          Math.abs(turnMutationState.updatedWeightKg - reportedWeight) < 0.1;
 
-        if (!explicitlyResolvingWeight) {
+        if (!persistedThisTurn) {
           return {
             allowed: false,
             intent: "BASELINE_CONFLICT",
-            reason: `BASELINE_CONFLICT: Conflito material entre o peso informado no diálogo (${reportedWeight} kg) e o último peso registrado no HealthVault (${vaultWeightKg} kg) ainda não foi resolvido. Confirme explicitamente a atualização do peso no prontuário (ex: 'sim, considere ${reportedWeight} kg como meu peso atual e registre isso') antes de persistir dieta ou recomendação.`,
+            reason: `BASELINE_CONFLICT: Conflito material entre o peso informado no diálogo (${reportedWeight} kg) e o último peso registrado no HealthVault (${vaultWeightKg} kg) ainda não foi resolvido. Registre primeiro o peso atual com healthvault_add_body_metric (somente se o usuário pediu explicitamente para atualizar o peso, ex: 'sim, considere ${reportedWeight} kg como meu peso atual e registre isso') e só depois persista dieta ou recomendação.`,
           };
         }
       }
