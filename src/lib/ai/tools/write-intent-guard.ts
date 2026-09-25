@@ -150,8 +150,16 @@ const GENERIC_AFFIRMATIVE_PATTERNS = [
   /^(sim|ok|pode|confirmo|confirmar|quero|com\s+certeza|fa[cç]a\s+isso|yes|confirm|go\s+ahead)[\s.!,]*$/i,
 ];
 
-// Clause boundaries: sentence ends, ", " (not decimal commas), and connectives.
-const CLAUSE_SPLIT = /[;!?\n]+|\.(?=\s|$)|,(?=\s)|\s+e\s+|\s+mas\s+|\s+depois\s+|\s+and\s+/i;
+// Clause boundaries: sentence ends, ", " (not decimal commas), connectives, and the start of an
+// exclusion ("salve tudo exceto o peso" → "salve tudo" | "exceto o peso").
+const CLAUSE_SPLIT =
+  /[;!?\n]+|\.(?=\s|$)|,(?=\s)|\s+e\s+|\s+mas\s+|\s+depois\s+|\s+and\s+|\s+but\s+|\s+(?=(?:exceto|excluindo|menos|salvo|except)\s)/i;
+
+// A verb-less clause opening with a negation/exclusion ("não o peso", "nem o protocolo",
+// "exceto a dieta"). "menos/salvo/fora" only exclude before a determiner ("menos a medicação"),
+// so a diet instruction like "menos carboidrato" is not read as an exclusion.
+const LEADING_EXCLUSION =
+  /^\s*(?:(?:n[aã]o|nem|exceto|excluindo|except|not)\b|(?:menos|salvo|fora)\s+(?:o|a|os|as|meu|minha|meus|minhas|do|da|dos|das)\b)/i;
 
 // A negation shortly before the write verb turns the clause into an explicit refusal
 // ("não salve", "não quero que você registre", "do not save").
@@ -177,7 +185,8 @@ interface WriteScope {
  * write verb. A clause without its own verb inherits the previous clause's mode
  * ("atualize minha dieta e medicação", "não altere o peso nem a dieta"). A write clause naming
  * no domain ("sim, salve") binds to what the previous assistant turn offered. Negated clauses
- * ("não salve a dieta") deny their domains even if another clause names them.
+ * ("não salve a dieta") deny their domains even if another clause names them, and so do verb-less
+ * exclusions after a write clause ("salve a dieta, não o peso", "salve tudo exceto o protocolo").
  */
 export function resolveWriteScope(userMessage: string, previousAssistantMessage?: string): WriteScope {
   const trimmed = userMessage.trim();
@@ -202,10 +211,14 @@ export function resolveWriteScope(userMessage: string, previousAssistantMessage?
     const isNegated = verbIndex !== -1 && NEGATION_BEFORE_VERB.test(clause.slice(0, verbIndex));
     const isMutation = verbIndex !== -1 && !isNegated;
     const isAdvisory = verbIndex === -1 && ADVISORY_PATTERNS.some((p) => p.test(clause));
-    const hasOwnMode = isMutation || isNegated || isAdvisory;
+    // Verb-less exclusion after a write clause ("…, não o peso", "…, menos a medicação"): the write
+    // verb is inherited negated. Following verb-less clauses stay excluded (least privilege).
+    const isInheritedExclusion: boolean =
+      verbIndex === -1 && lastMode === "MUTATION" && LEADING_EXCLUSION.test(clause);
+    const hasOwnMode = isMutation || isNegated || isAdvisory || isInheritedExclusion;
     const mode: "MUTATION" | "ADVISORY" | "NEGATED" | null = isMutation
       ? "MUTATION"
-      : isNegated
+      : isNegated || isInheritedExclusion
       ? "NEGATED"
       : isAdvisory
       ? "ADVISORY"

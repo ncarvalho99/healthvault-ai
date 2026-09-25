@@ -38,7 +38,7 @@ export function LatestRecommendationPanel({ recommendation }: LatestRecommendati
                 <span className="px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-600/40 text-emerald-400 font-mono text-[10px] font-bold">
                   v{recommendation.currentVersion}
                 </span>
-                <SafetyBadge status={recommendation.status} size="sm" />
+                <SafetyBadge status={recommendation.status} sourceType={recommendation.sourceType} size="sm" />
               </div>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 {recommendation.title} • Atualizado em{" "}

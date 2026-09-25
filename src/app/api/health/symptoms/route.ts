@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { assertOwnedRefs, ownershipErrorResponse, stripForeignRelation } from "@/lib/ownership";
 
 const createSymptomSchema = z.object({
   symptom: z.string().min(1, "Symptom name is required"),
@@ -24,12 +25,16 @@ export async function GET(req: NextRequest) {
     where: { userId: user!.userId },
     orderBy: { date: "desc" },
     include: {
-      medication: { select: { id: true, name: true } },
-      conversation: { select: { id: true, title: true } },
+      medication: { select: { id: true, name: true, userId: true } },
+      conversation: { select: { id: true, title: true, userId: true } },
     },
   });
 
-  return NextResponse.json({ symptoms });
+  return NextResponse.json({
+    symptoms: symptoms.map((row) =>
+      stripForeignRelation(stripForeignRelation(row, "medication", user!.userId), "conversation", user!.userId)
+    ),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -61,6 +66,8 @@ export async function POST(req: NextRequest) {
       conversationId,
     } = result.data;
 
+    await assertOwnedRefs(user!.userId, { conversationId, medicationId });
+
     const symptomEntry = await db.symptom.create({
       data: {
         userId: user!.userId,
@@ -88,6 +95,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ symptom: symptomEntry }, { status: 201 });
   } catch (error) {
+    const ownership = ownershipErrorResponse(error);
+    if (ownership) return ownership;
     console.error("Create symptom error:", error);
     return NextResponse.json(
       { error: "Failed to create symptom" },

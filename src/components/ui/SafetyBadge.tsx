@@ -1,4 +1,5 @@
 import React from "react";
+import { displayRecommendationStatus } from "@/lib/recommendation-origin";
 import { AlertCircle, CheckCircle2, UserCheck, Stethoscope, FileText, Archive } from "lucide-react";
 
 export type BadgeStatus =
@@ -7,15 +8,22 @@ export type BadgeStatus =
   | "USER_NOTE"
   | "CONFIRMED"
   | "ARCHIVED"
-  | "DRAFT";
+  | "DRAFT"
+  | "UNVERIFIED_CLINICAL";
 
 interface SafetyBadgeProps {
   status: BadgeStatus | string;
+  /**
+   * Recorded origin of the recommendation. Clinical-validation statuses are only rendered
+   * as such when the origin is DOCTOR; without it they render as "unverified".
+   */
+  sourceType?: string | null;
   size?: "sm" | "md";
 }
 
-export function SafetyBadge({ status, size = "md" }: SafetyBadgeProps) {
+export function SafetyBadge({ status: rawStatus, sourceType, size = "md" }: SafetyBadgeProps) {
   const isSmall = size === "sm";
+  const status = displayRecommendationStatus(rawStatus, sourceType);
 
   switch (status) {
     case "AI_SUGGESTION":
@@ -52,6 +60,31 @@ export function SafetyBadge({ status, size = "md" }: SafetyBadgeProps) {
         >
           <CheckCircle2 className={isSmall ? "w-3 h-3" : "w-3.5 h-3.5"} />
           <span>Validado / Confirmado</span>
+        </span>
+      );
+
+    case "UNVERIFIED_CLINICAL":
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 font-medium rounded-full bg-slate-800 border border-amber-700/50 text-amber-200 ${
+            isSmall ? "px-2 py-0.5 text-xs" : "px-2.5 py-1 text-xs"
+          }`}
+          title="Status clínico sem origem médica registrada. Não é uma validação médica verificada."
+        >
+          <AlertCircle className={isSmall ? "w-3 h-3" : "w-3.5 h-3.5"} />
+          <span>Validação não verificada</span>
+        </span>
+      );
+
+    case "DRAFT":
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 font-medium rounded-full bg-slate-800 text-slate-300 border border-slate-700 ${
+            isSmall ? "px-2 py-0.5 text-xs" : "px-2.5 py-1 text-xs"
+          }`}
+        >
+          <FileText className={isSmall ? "w-3 h-3" : "w-3.5 h-3.5"} />
+          <span>Rascunho</span>
         </span>
       );
 

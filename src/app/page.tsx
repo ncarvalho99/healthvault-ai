@@ -189,7 +189,7 @@ export default function DashboardPage() {
                         </p>
                       </div>
                     </div>
-                    {latestRec && <SafetyBadge status={latestRec.status} size="sm" />}
+                    {latestRec && <SafetyBadge status={latestRec.status} sourceType={latestRec.sourceType} size="sm" />}
                   </div>
 
                   {latestRec ? (

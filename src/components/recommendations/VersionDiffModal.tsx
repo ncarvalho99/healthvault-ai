@@ -12,7 +12,7 @@ interface VersionDiffModalProps {
 
 export function VersionDiffModal({ recommendationId, isOpen, onClose }: VersionDiffModalProps) {
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<{ recommendationTitle: string; versions: any[] } | null>(null);
+  const [data, setData] = useState<{ recommendationTitle: string; sourceType?: string | null; versions: any[] } | null>(null);
 
   useEffect(() => {
     if (!isOpen || !recommendationId) return;
@@ -75,7 +75,7 @@ export function VersionDiffModal({ recommendationId, isOpen, onClose }: VersionD
                     <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-bold">
                       v{ver.versionNumber}
                     </span>
-                    <SafetyBadge status={ver.status} size="sm" />
+                    <SafetyBadge status={ver.status} sourceType={data?.sourceType} size="sm" />
                     {ver.isInitial && (
                       <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-950/50 text-blue-300 border border-blue-800/40">
                         Protocolo Inicial

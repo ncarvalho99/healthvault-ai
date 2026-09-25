@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { assertOwnedRefs, ownershipErrorResponse } from "@/lib/ownership";
 
 const createDietPlanSchema = z.object({
   title: z.string().min(1, "Diet plan title is required"),
@@ -70,6 +71,8 @@ export async function POST(req: NextRequest) {
       conversationId,
     } = result.data;
 
+    await assertOwnedRefs(user!.userId, { conversationId });
+
     const dietPlan = await db.$transaction(async (tx) => {
       const plan = await tx.dietPlan.create({
         data: {
@@ -109,6 +112,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ dietPlan }, { status: 201 });
   } catch (error) {
+    const ownership = ownershipErrorResponse(error);
+    if (ownership) return ownership;
     console.error("Create diet plan error:", error);
     return NextResponse.json(
       { error: "Failed to create diet plan" },

@@ -4,6 +4,7 @@ import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { ActorType } from "@prisma/client";
+import { assertOwnedRefs, ownershipErrorResponse, stripForeignRelation } from "@/lib/ownership";
 
 const createMedicationSchema = z.object({
   recommendationId: z.string().uuid().optional(),
@@ -22,8 +23,8 @@ const createMedicationSchema = z.object({
   instructions: z.string().optional(),
   changeReason: z.string().optional().default("Initial medication initiation"),
   conversationId: z.string().uuid().optional(),
-  actorType: z.nativeEnum(ActorType).default(ActorType.USER),
-  actorName: z.string().optional(),
+  // Provenance (actorType/actorName) is fixed server-side: a manual change is always the
+  // authenticated user's. DOCTOR/AI actors are only recorded by their own trusted paths.
 });
 
 export async function GET(req: NextRequest) {
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
     },
     orderBy: { updatedAt: "desc" },
     include: {
-      recommendation: { select: { id: true, title: true, status: true } },
+      recommendation: { select: { id: true, title: true, status: true, userId: true } },
       versions: {
         orderBy: { versionNumber: "desc" },
         take: 1,
@@ -51,7 +52,9 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  return NextResponse.json({ medications });
+  return NextResponse.json({
+    medications: medications.map((row) => stripForeignRelation(row, "recommendation", user!.userId)),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -87,9 +90,11 @@ export async function POST(req: NextRequest) {
       instructions,
       changeReason,
       conversationId,
-      actorType,
-      actorName,
     } = result.data;
+    const actorType = ActorType.USER;
+    const actorName = user!.username;
+
+    await assertOwnedRefs(user!.userId, { conversationId, recommendationId });
 
     const medication = await db.$transaction(async (tx) => {
       const med = await tx.medication.create({
@@ -119,7 +124,7 @@ export async function POST(req: NextRequest) {
           changeReason,
           conversationId,
           actorType,
-          actorName: actorName || user!.username,
+          actorName,
         },
       });
 
@@ -138,6 +143,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ medication }, { status: 201 });
   } catch (error) {
+    const ownership = ownershipErrorResponse(error);
+    if (ownership) return ownership;
     console.error("Create medication error:", error);
     return NextResponse.json(
       { error: "Failed to create medication" },

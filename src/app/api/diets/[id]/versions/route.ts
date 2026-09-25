@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { assertOwnedRefs, ownershipErrorResponse } from "@/lib/ownership";
 
 const createDietVersionSchema = z.object({
   targetCalories: z.number().int().positive("Target calories must be positive"),
@@ -78,6 +79,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       conversationId,
     } = result.data;
 
+    await assertOwnedRefs(user!.userId, { conversationId });
+
     const newVersion = await db.$transaction(async (tx) => {
       const ver = await tx.dietVersion.create({
         data: {
@@ -121,6 +124,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     return NextResponse.json({ version: newVersion }, { status: 201 });
   } catch (error) {
+    const ownership = ownershipErrorResponse(error);
+    if (ownership) return ownership;
     console.error("Create diet version error:", error);
     return NextResponse.json(
       { error: "Failed to create diet version" },

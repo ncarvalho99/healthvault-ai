@@ -4,6 +4,7 @@ import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { ActorType } from "@prisma/client";
+import { assertOwnedRefs, ownershipErrorResponse } from "@/lib/ownership";
 
 const createMedicationVersionSchema = z.object({
   doseValue: z.number().positive("Dose value must be positive"),
@@ -15,8 +16,8 @@ const createMedicationVersionSchema = z.object({
   instructions: z.string().optional(),
   changeReason: z.string().min(1, "A change reason is required to maintain version traceability"),
   conversationId: z.string().uuid().optional(),
-  actorType: z.nativeEnum(ActorType).default(ActorType.USER),
-  actorName: z.string().optional(),
+  // Provenance (actorType/actorName) is fixed server-side: a manual change is always the
+  // authenticated user's. DOCTOR/AI actors are only recorded by their own trusted paths.
 });
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -84,9 +85,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       instructions,
       changeReason,
       conversationId,
-      actorType,
-      actorName,
     } = result.data;
+    const actorType = ActorType.USER;
+    const actorName = user!.username;
+
+    await assertOwnedRefs(user!.userId, { conversationId });
 
     const newVersion = await db.$transaction(async (tx) => {
       // 1. Mark end date on previous version if applicable
@@ -112,7 +115,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           changeReason,
           conversationId,
           actorType,
-          actorName: actorName || user!.username,
+          actorName,
         },
       });
 
@@ -144,6 +147,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     return NextResponse.json({ version: newVersion }, { status: 201 });
   } catch (error) {
+    const ownership = ownershipErrorResponse(error);
+    if (ownership) return ownership;
     console.error("Create medication version error:", error);
     return NextResponse.json(
       { error: "Failed to create medication version" },

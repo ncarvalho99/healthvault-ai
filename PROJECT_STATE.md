@@ -206,6 +206,14 @@ E2E_AI_MODEL="exploit"
     - **Dashboard**: gordura corporal ausente exibe "não informada" (sem ícone de tendência); lembretes vencidos exibem "Atrasado há N dias".
     - **Suíte**: 181 testes unitários em 60 suítes, 100% de aprovação (`multi-domain-turn-regression`, `domain-scoped-write-intent`, `negation-provenance-gate`, `legacy-notes-markdown`).
     - **Tabelas Markdown nas notas**: o normalizador de marcadores legados (`=== X ===`, `--- X ---`) passou a casar só linhas inteiras sem `|`, preservando separadores de tabela (`|---|---|`).
+15. **Isolamento entre Usuários nas APIs REST, Negação Herdada, Status com Origem Confiável**:
+    - **Ownership de toda FK enviada pelo cliente** (`src/lib/ownership.ts`): `assertOwnedConversation` / `assertOwnedMedication` / `assertOwnedRecommendation` / `assertOwnedRefs` validam `conversationId`, `medicationId` e `recommendationId` contra o usuário autenticado antes de gravar (recomendações, medicamentos e versões, dietas e versões, métricas, exames, sintomas, reversão). Falha → `404 FOREIGN_KEY_NOT_OWNED` (mesma resposta de ID inexistente, sem oráculo de UUID). Leituras descartam relações de outro usuário (`stripForeignRelation`) e as conversas só anexam recomendações do próprio dono — cobre linhas injetadas antes da correção. Teste estático garante que toda rota com FK no schema chama o helper.
+    - **Negação herdada**: cláusula sem verbo iniciada por `não/nem/exceto/menos o…/salvo o…` após uma cláusula de gravação nega os domínios citados ("salve a dieta, não o peso", "atualize o peso, menos a medicação", "salve tudo exceto o protocolo"). "menos carboidrato" continua sendo instrução de dieta.
+    - **Oferta de salvamento só quando positiva**: frases negadas ("Não vou salvar o plano sem sua autorização") não contam como oferta; "salvar o plano" só é oferta em forma de pergunta. Um "sim" após uma negação não autoriza nada.
+    - **Status clínico exige origem confiável**: a rota manual aceita apenas `DRAFT`/`USER_NOTE`/`ARCHIVED` (+ `AI_SUGGESTION` para registros da IA e o status atual); `DOCTOR_RECOMMENDATION`/`CONFIRMED` → `403 STATUS_REQUIRES_TRUSTED_ORIGIN`. O `SafetyBadge` só mostra "Recomendação Médica"/"Validado" com `sourceType = DOCTOR`; caso contrário exibe "Validação não verificada".
+    - **Proveniência de medicamentos fixada no servidor**: as APIs manuais não aceitam mais `actorType`/`actorName` do cliente (sempre `USER` + username). `summarySnapshot` removido dos schemas REST de recomendação.
+    - **Protocolo automático só no protocolo nutricional**: o destino precisa conter a seção "Plano nutricional vigente" e ser único na conversa; um protocolo farmacológico da mesma conversa nunca é alterado. Sem destino inequívoco, cria-se um novo "Protocolo Nutricional".
+    - **Suíte**: 213 testes unitários em 65 suítes (`tenant-isolation-status-policy`).
 
 ---
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { assertOwnedRefs, ownershipErrorResponse, stripForeignRelation } from "@/lib/ownership";
 
 const createMetricSchema = z.object({
   date: z.string().optional(),
@@ -23,11 +24,13 @@ export async function GET(req: NextRequest) {
     where: { userId: user!.userId },
     orderBy: { date: "desc" },
     include: {
-      conversation: { select: { id: true, title: true } },
+      conversation: { select: { id: true, title: true, userId: true } },
     },
   });
 
-  return NextResponse.json({ metrics });
+  return NextResponse.json({
+    metrics: metrics.map((row) => stripForeignRelation(row, "conversation", user!.userId)),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -58,6 +61,8 @@ export async function POST(req: NextRequest) {
       conversationId,
     } = result.data;
 
+    await assertOwnedRefs(user!.userId, { conversationId });
+
     const metric = await db.bodyMetric.create({
       data: {
         userId: user!.userId,
@@ -84,6 +89,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ metric }, { status: 201 });
   } catch (error) {
+    const ownership = ownershipErrorResponse(error);
+    if (ownership) return ownership;
     console.error("Create metric error:", error);
     return NextResponse.json(
       { error: "Failed to create metric" },

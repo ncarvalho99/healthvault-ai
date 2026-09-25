@@ -45,9 +45,10 @@ export async function GET(req: NextRequest) {
     orderBy: { updatedAt: "desc" },
     include: {
       _count: {
-        select: { messages: true, recommendations: true },
+        select: { messages: true, recommendations: { where: { userId: user!.userId } } },
       },
       recommendations: {
+        where: { userId: user!.userId },
         orderBy: { updatedAt: "desc" },
         take: 1,
         select: {

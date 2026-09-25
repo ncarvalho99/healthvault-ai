@@ -9,7 +9,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const recommendation = await db.recommendation.findFirst({
     where: { id: params.id, userId: user!.userId },
-    select: { id: true, title: true },
+    select: { id: true, title: true, sourceType: true },
   });
 
   if (!recommendation) {
@@ -57,6 +57,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   return NextResponse.json({
     recommendationTitle: recommendation.title,
+    sourceType: recommendation.sourceType,
     versions: enrichedVersions.reverse(), // Show newest first
   });
 }

@@ -5,12 +5,14 @@ import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { RecommendationService } from "@/lib/services/recommendation-service";
 import { RecommendationStatus, ActorType } from "@prisma/client";
+import { assertOwnedConversation, ownershipErrorResponse, stripForeignRelation } from "@/lib/ownership";
+import { isManualRecommendationStatusAllowed } from "@/lib/recommendation-origin";
 
 const updateRecommendationSchema = z.object({
   title: z.string().min(1).optional(),
   status: z.nativeEnum(RecommendationStatus).optional(),
   notes: z.string().optional(),
-  summarySnapshot: z.record(z.any()).optional(),
+  // summarySnapshot is built server-side (RecommendationService); client values are not accepted.
   changeReason: z.string().min(1, "Change reason is required to maintain clinical audit trail"),
   conversationId: z.string().uuid().optional(),
 });
@@ -22,12 +24,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const recommendation = await db.recommendation.findFirst({
     where: { id: params.id, userId: user!.userId },
     include: {
-      conversation: { select: { id: true, title: true } },
+      conversation: { select: { id: true, title: true, userId: true } },
       versions: {
         orderBy: { versionNumber: "desc" },
       },
       medications: {
-        where: { isActive: true },
+        where: { isActive: true, userId: user!.userId },
         include: {
           versions: {
             orderBy: { versionNumber: "desc" },
@@ -42,7 +44,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ error: "Recommendation not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ recommendation });
+  return NextResponse.json({ recommendation: stripForeignRelation(recommendation, "conversation", user!.userId) });
 }
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
@@ -74,10 +76,21 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       title,
       status,
       notes,
-      summarySnapshot,
       changeReason,
       conversationId,
     } = result.data;
+
+    if (status && !isManualRecommendationStatusAllowed(status, existing.sourceType, existing.status)) {
+      return NextResponse.json(
+        {
+          error: "Este status exige uma origem médica verificada e não pode ser atribuído manualmente.",
+          code: "STATUS_REQUIRES_TRUSTED_ORIGIN",
+        },
+        { status: 403 }
+      );
+    }
+
+    await assertOwnedConversation(user!.userId, conversationId);
 
     const finalStatus = status || existing.status;
 
@@ -99,6 +112,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
     return NextResponse.json({ recommendation: updated });
   } catch (error) {
+    const ownership = ownershipErrorResponse(error);
+    if (ownership) return ownership;
     console.error("Update recommendation error:", error);
     return NextResponse.json(
       { error: "Failed to update recommendation" },

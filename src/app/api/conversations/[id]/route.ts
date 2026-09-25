@@ -39,6 +39,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         },
       },
       recommendations: {
+        // Defense in depth: never attach another user's records to this conversation
+        where: { userId: user!.userId },
         orderBy: { updatedAt: "desc" },
         take: 1,
         include: {
@@ -47,7 +49,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
             take: 1,
           },
           medications: {
-            where: { isActive: true },
+            where: { isActive: true, userId: user!.userId },
             include: {
               versions: {
                 orderBy: { versionNumber: "desc" },

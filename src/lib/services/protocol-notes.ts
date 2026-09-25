@@ -61,3 +61,18 @@ export function upsertCurrentPlanSection(notes: string | null | undefined, plan:
   const rest = base.slice(end).replace(/^\n+/, "");
   return [base.slice(0, start).trimEnd(), section, rest].filter(Boolean).join("\n\n");
 }
+
+/** A protocol is structurally identified as the nutrition protocol only by its current-plan section. */
+export function isNutritionProtocol(notes: string | null | undefined): boolean {
+  return typeof notes === "string" && notes.includes(CURRENT_PLAN_HEADING);
+}
+
+/**
+ * Target for the automatic plan → protocol update: the single nutrition protocol among the
+ * candidates. Anything else (none, several, or only non-nutrition protocols such as a
+ * pharmacological one) is not an unambiguous target → null, and a new protocol is created.
+ */
+export function selectNutritionProtocolTarget<T extends { notes: string | null }>(candidates: T[]): T | null {
+  const nutrition = candidates.filter((c) => isNutritionProtocol(c.notes));
+  return nutrition.length === 1 ? nutrition[0] : null;
+}

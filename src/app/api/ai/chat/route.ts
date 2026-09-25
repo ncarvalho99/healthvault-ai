@@ -23,7 +23,12 @@ import { EvidenceConsistencyGate } from "@/lib/ai/response/evidence-consistency-
 import { isHealthAiModel } from "@/lib/ai/models/model-identification";
 import { logAudit } from "@/lib/audit";
 import { SenderType, RecommendationStatus, SourceType } from "@prisma/client";
-import { planFromDietArgs, upsertCurrentPlanSection } from "@/lib/services/protocol-notes";
+import {
+  CURRENT_PLAN_HEADING,
+  planFromDietArgs,
+  selectNutritionProtocolTarget,
+  upsertCurrentPlanSection,
+} from "@/lib/services/protocol-notes";
 
 const chatRequestSchema = z.object({
   conversationId: z.string().uuid("Invalid conversation ID"),
@@ -485,18 +490,23 @@ ${consistency.remediationPrompt}`,
       !turnMutationState.recommendationHandledThisTurn &&
       resolveWriteScope(content, previousAssistantMessage).domains.has("recommendations")
     ) {
-      // Target: only an AI protocol already versioned in this conversation; otherwise a new protocol.
-      // Never guess among unrelated protocols, and never version user-authored notes.
-      const targetRecommendation = await db.recommendation.findFirst({
+      // Target: only the single AI nutrition protocol (structurally identified by its current-plan
+      // section) already versioned in this conversation. A different protocol from the same
+      // conversation (e.g. pharmacological) is never a target; when there is no unambiguous
+      // nutrition protocol, a new "Protocolo Nutricional" is created instead.
+      const candidateRecommendations = await db.recommendation.findMany({
         where: {
           userId: user!.userId,
           status: { notIn: [RecommendationStatus.ARCHIVED, RecommendationStatus.USER_NOTE] },
           sourceType: SourceType.AI_AGENT,
           versions: { some: { conversationId } },
+          notes: { contains: CURRENT_PLAN_HEADING },
         },
         orderBy: { updatedAt: "desc" },
+        take: 2,
         select: { id: true, notes: true },
       });
+      const targetRecommendation = selectNutritionProtocolTarget(candidateRecommendations);
 
       const plan = planFromDietArgs(
         lastPersistedDietArgs,

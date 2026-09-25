@@ -4,15 +4,18 @@ import { authenticateRequest } from "@/lib/session";
 import { db } from "@/lib/db";
 import { RecommendationService } from "@/lib/services/recommendation-service";
 import { RecommendationStatus, SourceType, ActorType } from "@prisma/client";
+import { assertOwnedConversation, ownershipErrorResponse, stripForeignRelation } from "@/lib/ownership";
+import { USER_ASSIGNABLE_RECOMMENDATION_STATUSES } from "@/lib/recommendation-origin";
 
 const createRecommendationSchema = z.object({
   conversationId: z.string().uuid().optional(),
   title: z.string().min(1, "Title is required"),
   // Provenance (source, actor, origin) is fixed server-side: manual creation is always user-authored.
   // AI-created protocols go through the agent tools instead.
-  status: z.nativeEnum(RecommendationStatus).default(RecommendationStatus.USER_NOTE),
+  // Clinical-validation statuses (DOCTOR_RECOMMENDATION / CONFIRMED) cannot be self-assigned.
+  status: z.enum(USER_ASSIGNABLE_RECOMMENDATION_STATUSES).default("USER_NOTE"),
   notes: z.string().optional(),
-  summarySnapshot: z.record(z.any()).default({}),
+  // summarySnapshot is built server-side (RecommendationService); client values are not accepted.
   changeReason: z.string().optional().default("Initial recommendation snapshot"),
 });
 
@@ -32,13 +35,13 @@ export async function GET(req: NextRequest) {
     where: whereClause,
     orderBy: { updatedAt: "desc" },
     include: {
-      conversation: { select: { id: true, title: true } },
+      conversation: { select: { id: true, title: true, userId: true } },
       versions: {
         orderBy: { versionNumber: "desc" },
         take: 1,
       },
       medications: {
-        where: { isActive: true },
+        where: { isActive: true, userId: user!.userId },
         include: {
           versions: {
             orderBy: { versionNumber: "desc" },
@@ -49,7 +52,9 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  return NextResponse.json({ recommendations });
+  return NextResponse.json({
+    recommendations: recommendations.map((row) => stripForeignRelation(row, "conversation", user!.userId)),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -77,11 +82,13 @@ export async function POST(req: NextRequest) {
       changeReason,
     } = result.data;
 
+    await assertOwnedConversation(user!.userId, conversationId);
+
     // Create Recommendation AND Version 1 using central service and authoritative server-side snapshot
     const recommendation = await RecommendationService.create(user!.userId, {
       conversationId,
       title,
-      status,
+      status: status as RecommendationStatus,
       sourceType: SourceType.USER_NOTE,
       sourceName: user!.username,
       notes,
@@ -95,6 +102,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ recommendation }, { status: 201 });
   } catch (error) {
+    const ownership = ownershipErrorResponse(error);
+    if (ownership) return ownership;
     console.error("Create recommendation error:", error);
     return NextResponse.json(
       { error: "Failed to create recommendation" },

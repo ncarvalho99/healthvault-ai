@@ -8,7 +8,11 @@ import { VersionDiffModal } from "@/components/recommendations/VersionDiffModal"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Toast } from "@/components/ui/Toast";
 import { Sparkles, GitCommit, Clock, ArrowRight, Plus, History, Trash2, Edit3 } from "lucide-react";
-import { recommendationOriginLabel } from "@/lib/recommendation-origin";
+import {
+  recommendationOriginLabel,
+  manualRecommendationStatusOptions,
+  RECOMMENDATION_STATUS_LABELS,
+} from "@/lib/recommendation-origin";
 
 export default function RecommendationsPage() {
   const [recommendations, setRecommendations] = useState<any[]>([]);
@@ -195,7 +199,7 @@ export default function RecommendationsPage() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <SafetyBadge status={rec.status} />
+                      <SafetyBadge status={rec.status} sourceType={rec.sourceType} />
 
                       <button
                         onClick={() => setSelectedRecId(rec.id)}
@@ -384,11 +388,11 @@ export default function RecommendationsPage() {
                   onChange={(e) => setEditStatus(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
                 >
-                  <option value="AI_SUGGESTION">Sugestão de IA</option>
-                  <option value="DOCTOR_RECOMMENDATION">Recomendação Médica</option>
-                  <option value="CONFIRMED">Confirmado / Validado</option>
-                  <option value="USER_NOTE">Nota Pessoal</option>
-                  <option value="ARCHIVED">Arquivado</option>
+                  {manualRecommendationStatusOptions(editingRec.sourceType, editingRec.status).map((value) => (
+                    <option key={value} value={value}>
+                      {RECOMMENDATION_STATUS_LABELS[value] || value}
+                    </option>
+                  ))}
                 </select>
               </div>
 

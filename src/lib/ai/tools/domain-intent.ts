@@ -67,18 +67,37 @@ export function mentionedWriteDomains(text: string): Set<WriteDomain> {
 
 const OFFER_SENTENCE_PATTERNS = [
   /(?:quer\s+que\s+eu|deseja\s+que\s+eu|posso|gostaria\s+que\s+eu)\s+(?:salve|salvar|registre|registrar|grave|gravar|aplique|aplicar|atualize|atualizar)/i,
-  /(?:salvar|gravar|registrar|aplicar)\s+(?:este|esse|o)\s+plano/i,
-  /(?:would\s+you\s+like\s+me\s+to|should\s+I)\s+(?:save|record|apply|register)/i,
+  /(?:would\s+you\s+like\s+me\s+to|should\s+I|shall\s+I)\s+(?:save|record|apply|register|update)/i,
 ];
 
+// "salvar este plano" alone is not an offer; it only counts when asked ("Salvar o plano?").
+const QUESTION_ONLY_OFFER_PATTERN = /(?:salvar|gravar|registrar|aplicar)\s+(?:este|esse|o)\s+plano/i;
+
+// A negation before the offer verb makes the sentence a statement/refusal, not an offer
+// ("Não vou salvar o plano sem sua autorização", "não posso registrar", "I won't save").
+const OFFER_NEGATION = /\b(?:n[aã]o|nunca|jamais|sem|not|never|won'?t|can'?t|cannot)\b/i;
+
+function positiveOfferIndex(sentence: string): number {
+  for (const p of OFFER_SENTENCE_PATTERNS) {
+    const i = sentence.search(p);
+    if (i !== -1) return i;
+  }
+  return sentence.includes("?") ? sentence.search(QUESTION_ONLY_OFFER_PATTERN) : -1;
+}
+
 /**
- * The sentence in which the assistant offered to persist something, if any (last one wins).
+ * The sentence in which the assistant made a real, positive offer to persist something, if any
+ * (last one wins). Negated sentences about saving are never offers, so a following "sim" cannot
+ * become a confirmation of something the assistant said it would NOT do.
  */
 export function findSaveOfferSentence(assistantMessage?: string | null): string | null {
   if (!assistantMessage) return null;
   const sentences = assistantMessage.split(/(?<=[.!?])\s+|\n+/);
   for (let i = sentences.length - 1; i >= 0; i--) {
-    if (OFFER_SENTENCE_PATTERNS.some((p) => p.test(sentences[i]))) return sentences[i];
+    const index = positiveOfferIndex(sentences[i]);
+    if (index === -1) continue;
+    if (OFFER_NEGATION.test(sentences[i].slice(0, index))) continue;
+    return sentences[i];
   }
   return null;
 }
