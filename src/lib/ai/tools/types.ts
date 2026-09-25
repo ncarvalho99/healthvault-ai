@@ -26,6 +26,7 @@ export interface ToolExecutionContext {
   toolName: string;
   rawArguments: string | Record<string, any>;
   informationOrigin?: string;
+  agentMode?: "AGENT" | "CHAT_ONLY" | "MANUAL";
 }
 
 export interface ToolExecutionResult {

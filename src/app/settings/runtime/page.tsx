@@ -325,23 +325,55 @@ export default function RuntimeStatusPage() {
                         </div>
                         <div className="flex justify-between">
                           <span>Reasoning Policy:</span>
-                          <span className={`font-mono font-bold ${m.externalId === "exploit" ? "text-rose-400" : "text-blue-400"}`}>
-                            {m.externalId === "exploit" ? "DISABLED (Filtered)" : (m.reasoningPolicy || "AUTO")}
+                          <span
+                            className={`font-mono font-bold ${
+                              m.externalId === "exploit" || m.externalId === "health-ai"
+                                ? "text-rose-400"
+                                : "text-blue-400"
+                            }`}
+                          >
+                            {m.externalId === "exploit" || m.externalId === "health-ai"
+                              ? "DISABLED (Filtered)"
+                              : m.reasoningPolicy || "AUTO"}
                           </span>
                         </div>
                         <div className="flex justify-between">
                           <span>Web Research Policy:</span>
-                          <span className={`font-mono font-bold ${m.externalId === "exploit" ? "text-emerald-400" : "text-slate-400"}`}>
-                            {m.externalId === "exploit" ? "REQUIRED (Web-First)" : (m.webResearchPolicy || "AUTO")}
+                          <span
+                            className={`font-mono font-bold ${
+                              m.externalId === "exploit" || m.externalId === "health-ai"
+                                ? "text-emerald-400"
+                                : "text-slate-400"
+                            }`}
+                          >
+                            {m.externalId === "exploit" || m.externalId === "health-ai"
+                              ? "REQUIRED (Web-First)"
+                              : m.webResearchPolicy || "AUTO"}
                           </span>
                         </div>
+                        {m.externalId === "health-ai" && (
+                          <>
+                            <div className="flex justify-between">
+                              <span>HealthVault Aware:</span>
+                              <span className="font-mono font-bold text-emerald-400">Yes</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Persistent Vault Context:</span>
+                              <span className="font-mono text-emerald-300">Enabled</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Chat Only Access:</span>
+                              <span className="font-mono text-blue-300">Read-only</span>
+                            </div>
+                          </>
+                        )}
                         <div className="flex justify-between">
                           <span>Web Provider:</span>
                           <span className="font-mono text-slate-300">
                             {data.researchInfo?.activeProvider || "SearXNG"}
                           </span>
                         </div>
-                        {m.externalId === "exploit" && (
+                        {(m.externalId === "exploit" || m.externalId === "health-ai") && (
                           <div className="pt-1.5 border-t border-slate-900 text-[10px] space-y-0.5 text-slate-400">
                             <div className="flex justify-between">
                               <span>Última Pesquisa:</span>

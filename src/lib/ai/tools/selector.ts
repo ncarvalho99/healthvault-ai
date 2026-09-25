@@ -14,16 +14,21 @@ export class ToolSelector {
   static selectTools(options: ToolScopingOptions = {}): HealthVaultTool[] {
     const { userMessage = "", agentMode = "AGENT" } = options;
 
-    // In CHAT_ONLY or MANUAL modes, no tools are dispatched
-    if (agentMode === "CHAT_ONLY" || agentMode === "MANUAL") {
+    // In MANUAL mode, no tools are dispatched
+    if (agentMode === "MANUAL") {
       return [];
     }
 
     const allTools = ToolRegistry.getAll();
+    const isChatOnly = agentMode === "CHAT_ONLY";
+
+    // In CHAT_ONLY mode, only tools with access === "read" are allowed (read-only HealthVault access)
+    const availablePool = isChatOnly ? allTools.filter((t) => t.access === "read") : allTools;
+
     const text = userMessage.toLowerCase();
 
-    // Base tools always included in AGENT mode
-    const baseToolNames = ["healthvault_ping", "healthvault_get_context"];
+    // Base read-only tools always included
+    const baseToolNames = ["healthvault_ping", "healthvault_get_context", "healthvault_search"];
 
     // Keyword detection for focused scoping
     const isDietTopic = /dieta|caloria|macro|prote[ií]na|carbo|gordura|refei[cç][aã]o|alimento|comida|nutri/i.test(text);
@@ -34,36 +39,36 @@ export class ToolSelector {
 
     // If a specific topic is detected, return focused tool group to save tokens and avoid LLM hallucinations
     if (isDietTopic && !isMedTopic) {
-      return allTools.filter(
+      return availablePool.filter(
         (t) => baseToolNames.includes(t.name) || t.category === "nutrition" || t.category === "recommendations"
       );
     }
 
     if (isMedTopic && !isDietTopic) {
-      return allTools.filter(
+      return availablePool.filter(
         (t) => baseToolNames.includes(t.name) || t.category === "medications" || t.category === "symptoms" || t.category === "recommendations"
       );
     }
 
     if (isMetricTopic && !isDietTopic && !isMedTopic) {
-      return allTools.filter(
+      return availablePool.filter(
         (t) => baseToolNames.includes(t.name) || t.category === "metrics"
       );
     }
 
     if (isSymptomTopic && !isMedTopic) {
-      return allTools.filter(
+      return availablePool.filter(
         (t) => baseToolNames.includes(t.name) || t.category === "symptoms" || t.category === "medications"
       );
     }
 
     if (isLabTopic) {
-      return allTools.filter(
+      return availablePool.filter(
         (t) => baseToolNames.includes(t.name) || t.category === "labs"
       );
     }
 
-    // Default safe fallback: all enabled tools
-    return allTools;
+    // Default: return available pool
+    return availablePool;
   }
 }

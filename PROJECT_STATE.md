@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 75 testes unitários (`node:test` + `tsx` em 28 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 80 testes unitários (`node:test` + `tsx` em 29 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -151,6 +151,13 @@ E2E_AI_MODEL="exploit"
    - **Isolamento de Dados**: Usuários normais visualizam e excluem apenas suas próprias recomendações, medicamentos, dietas, métricas e conversas.
    - **Alteração de Senha Segura**: Página dedicada em `/settings/password` com validação de senha atual, hash Bcrypt e registro imutável em auditoria.
    - **Interface Mobile Responsiva**: Drawer deslizante (slide-over) com botão hambúrguer responsivo nos cabeçalhos (`Header.tsx` e tela de chat), eliminando sobreposição da barra lateral em dispositivos móveis.
+9. **Integração Especializada do Combo `health-ai` (ANON + HealthVault-Aware)**:
+   - Sucessor especializado do combo `exploit`, adotando a persona ANON, voz direta e assinatura `[MAHI68]`, enquanto preserva o `exploit` original 100% intacto.
+   - **Contrato de Runtime no Topo do Prompt**: O HealthVault é definido como autoridade máxima factual e operacional; dados estruturados (`<healthvault_data>`) e evidências externas (`<web_research>`) prevalecem sobre memórias de treinamento e estilo.
+   - **Persistência entre Sessões**: O modelo não exige que dados pessoais sejam repetidos no chat atual, acessando o estado do prontuário diretamente.
+   - **Resolução de Referências Pessoais**: Desambiguação inteligente de múltiplos medicamentos ativos e grounding automático.
+   - **Chat Apenas Read-Only com Trava de Defesa em Profundidade**: No modo `CHAT_ONLY`, ferramentas de leitura (`healthvault_get_context`, `healthvault_search`, etc.) são fornecidas para consulta ao prontuário, enquanto mutações de escrita são bloqueadas no `ToolDispatcher` com código `READ_ONLY_MODE`.
+   - **Políticas Web-First e Reasoning**: `ResearchPolicy = REQUIRED` e `ReasoningPolicy = DISABLED` aplicadas centralmente.
 
 ---
 

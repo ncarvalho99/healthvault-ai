@@ -235,6 +235,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
       maxRecentMessages: 15,
       agentMode,
       researchContextBlock: researchResult.contextBlock,
+      activeModel,
     });
 
     // 6. Server-side Tool Loop with Infinite Loop Protection
@@ -322,6 +323,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
             toolCallId,
             toolName,
             rawArguments: rawArgs,
+            agentMode,
           });
 
           executedToolsList.push({

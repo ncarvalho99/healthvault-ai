@@ -20,7 +20,12 @@ export function resolveResearchPolicy(
   if (!modelId) return "AUTO";
   const normalized = modelId.trim().toLowerCase();
 
-  if (normalized === "exploit" || normalized.includes("exploit")) {
+  if (
+    normalized === "exploit" ||
+    normalized.includes("exploit") ||
+    normalized === "health-ai" ||
+    normalized.includes("health-ai")
+  ) {
     return "REQUIRED";
   }
 

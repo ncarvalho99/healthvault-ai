@@ -20,21 +20,59 @@ export class ToolDispatcher {
   static async execute(context: ToolExecutionContext): Promise<ToolExecutionResult> {
     const { userId, conversationId, messageId, integrationId, toolCallId, toolName, rawArguments } = context;
 
-    await logAudit({
-      userId,
-      action: "AI_TOOL_REQUESTED",
-      entity: "AI_TOOL",
-      entityId: toolCallId,
-      metadata: { toolName, conversationId },
-    });
+    // 1. Lookup tool in ToolRegistry
+    const tool = ToolRegistry.get(toolName);
+    if (!tool) {
+      return {
+        success: false,
+        error: {
+          code: "UNKNOWN_TOOL",
+          message: `Ferramenta '${toolName}' não existe ou não está autorizada no HealthVault.`,
+        },
+      };
+    }
 
-    // 1. Idempotency Check
+    // 1.5 Defense-in-depth: Block write operations when operating in CHAT_ONLY mode
+    if (context.agentMode === "CHAT_ONLY" && tool.access !== "read") {
+      try {
+        await logAudit({
+          userId,
+          action: "AI_TOOL_WRITE_BLOCKED_CHAT_ONLY",
+          entity: "AI_TOOL",
+          entityId: toolCallId,
+          metadata: { toolName, access: tool.access, conversationId },
+        });
+      } catch {
+        // Safe in unit test runs without active database
+      }
+      return {
+        success: false,
+        error: {
+          code: "READ_ONLY_MODE",
+          message: "Operações de alteração ou gravação estão desabilitadas no modo Chat Apenas (CHAT_ONLY). Apenas consultas de leitura são autorizadas.",
+        },
+      };
+    }
+
+    try {
+      await logAudit({
+        userId,
+        action: "AI_TOOL_REQUESTED",
+        entity: "AI_TOOL",
+        entityId: toolCallId,
+        metadata: { toolName, conversationId },
+      });
+    } catch {
+      // Safe in unit test runs without active database
+    }
+
+    // 2. Idempotency Check
     const cachedResult = await IdempotencyEngine.getExistingResult(context);
     if (cachedResult) {
       return cachedResult;
     }
 
-    // 2. Parse arguments
+    // 3. Parse arguments
     let args: any = {};
     if (typeof rawArguments === "string") {
       try {
@@ -52,28 +90,20 @@ export class ToolDispatcher {
       args = rawArguments || {};
     }
 
-    // 3. Lookup tool in ToolRegistry
-    const tool = ToolRegistry.get(toolName);
-    if (!tool) {
-      return {
-        success: false,
-        error: {
-          code: "UNKNOWN_TOOL",
-          message: `Ferramenta '${toolName}' não existe ou não está autorizada no HealthVault.`,
-        },
-      };
-    }
-
     // 4. Permission Engine Check
     const perm = PermissionEngine.checkPermission(tool, context);
     if (!perm.allowed) {
-      await logAudit({
-        userId,
-        action: "AI_TOOL_PERMISSION_DENIED",
-        entity: "AI_TOOL",
-        entityId: toolCallId,
-        metadata: { toolName, reason: perm.reason },
-      });
+      try {
+        await logAudit({
+          userId,
+          action: "AI_TOOL_PERMISSION_DENIED",
+          entity: "AI_TOOL",
+          entityId: toolCallId,
+          metadata: { toolName, reason: perm.reason },
+        });
+      } catch {
+        // Safe in unit test runs without active database
+      }
       return {
         success: false,
         error: {

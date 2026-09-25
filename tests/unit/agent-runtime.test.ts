@@ -79,13 +79,15 @@ describe("Agent Tool Runtime — Tool Scoping & Selector", () => {
     assert.strictEqual(toolNames.includes("healthvault_create_diet"), false);
   });
 
-  it("should return zero tools when agentMode is CHAT_ONLY", () => {
+  it("should return only read-only tools and zero write tools when agentMode is CHAT_ONLY", () => {
     const tools = ToolSelector.selectTools({
       userMessage: "Altere meu peso para 84 kg",
       agentMode: "CHAT_ONLY",
     });
 
-    assert.strictEqual(tools.length, 0);
+    assert.ok(tools.length > 0);
+    assert.strictEqual(tools.every((t) => t.access === "read"), true);
+    assert.strictEqual(tools.some((t) => t.name === "healthvault_add_body_metric"), false);
   });
 });
 
