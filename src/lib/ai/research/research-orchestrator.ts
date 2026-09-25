@@ -5,10 +5,12 @@ import {
   ResearchPolicy,
   ResearchStrategy,
   SearchResult,
+  VaultResolutionResult,
   WebResearchProvider,
 } from "./types";
 import { resolveResearchPolicy } from "./research-policy";
 import { ResearchIntentAnalyzer } from "./research-intent";
+import { VaultEntityResolver } from "./vault-entity-resolver";
 import { SourceRanking } from "./source-ranking";
 import { ResearchCache } from "./research-cache";
 import { ResearchContextBuilder } from "./research-context-builder";
@@ -19,6 +21,7 @@ import { resolveResearchProviderPriority } from "./provider-priority";
 import { QuerySanitizer } from "./query-sanitizer";
 
 export interface ResearchOrchestratorOptions {
+  userId?: string;
   userMessage: string;
   modelId: string;
   agentMode?: string;
@@ -27,6 +30,7 @@ export interface ResearchOrchestratorOptions {
   omnirouteBaseUrl?: string;
   omnirouteApiKey?: string;
   strategy?: ResearchStrategy;
+  dbClient?: any;
 }
 
 export class ResearchOrchestrator {
@@ -108,6 +112,9 @@ export class ResearchOrchestrator {
         provider: "none",
         latencyMs: Math.round(performance.now() - start),
         status: "SKIPPED",
+        vaultResolutionUsed: false,
+        resolvedEntityTypes: [],
+        resolvedEntityCount: 0,
       };
     }
 
@@ -136,7 +143,45 @@ export class ResearchOrchestrator {
           provider: "none",
           latencyMs: Math.round(performance.now() - start),
           status: "SKIPPED",
+          vaultResolutionUsed: false,
+          resolvedEntityTypes: [],
+          resolvedEntityCount: 0,
         };
+      }
+    }
+
+    // 2.5. Vault Entity Resolution for MIXED research intent
+    let vaultResolution: VaultResolutionResult = {
+      used: false,
+      resolvedEntities: [],
+      resolvedEntityTypes: [],
+      resolvedEntityCount: 0,
+      hasAmbiguity: false,
+      suggestedQueries: [],
+      domainTargetedQueries: [],
+    };
+
+    if (intentAnalysis.intent === "MIXED" && params.userId) {
+      vaultResolution = await VaultEntityResolver.resolve({
+        userId: params.userId,
+        userMessage: params.userMessage,
+        intent: intentAnalysis.intent,
+        externalEntities: intentAnalysis.entities,
+        dbClient: params.dbClient,
+      });
+
+      if (vaultResolution.used) {
+        if (vaultResolution.suggestedQueries.length > 0) {
+          intentAnalysis.suggestedQueries = vaultResolution.suggestedQueries;
+        }
+        if (vaultResolution.domainTargetedQueries.length > 0) {
+          intentAnalysis.domainTargetedQueries = vaultResolution.domainTargetedQueries;
+        }
+        intentAnalysis.vaultResolutionUsed = true;
+        intentAnalysis.resolvedEntityTypes = vaultResolution.resolvedEntityTypes;
+        intentAnalysis.resolvedEntityCount = vaultResolution.resolvedEntityCount;
+        intentAnalysis.hasAmbiguity = vaultResolution.hasAmbiguity;
+        intentAnalysis.ambiguousItems = vaultResolution.ambiguousItems;
       }
     }
 
@@ -161,6 +206,11 @@ export class ResearchOrchestrator {
         status: "NO_PROVIDER",
         reasonCode: "NO_PROVIDER",
         errorMessage: "Nenhum provedor de busca na web configurado no sistema.",
+        vaultResolutionUsed: vaultResolution.used,
+        resolvedEntityTypes: vaultResolution.resolvedEntityTypes,
+        resolvedEntityCount: vaultResolution.resolvedEntityCount,
+        hasAmbiguity: vaultResolution.hasAmbiguity,
+        ambiguousItems: vaultResolution.ambiguousItems,
       };
     }
 
@@ -183,6 +233,9 @@ export class ResearchOrchestrator {
 
       if (evidenceEval.eligible) {
         const context = ResearchContextBuilder.buildContext(ranked, runId);
+        if (vaultResolution.hasAmbiguity && vaultResolution.ambiguousItems) {
+          context.xmlBlock += `\n<!-- VAULT_AMBIGUITY_NOTE: Patient has multiple active medications (${vaultResolution.ambiguousItems.join(", ")}). Research queries covered each active medication. Advise patient on each or request clarification if necessary. -->\n`;
+        }
         return {
           runId,
           query: primaryQuery,
@@ -199,6 +252,11 @@ export class ResearchOrchestrator {
           rankedResultCount: ranked.length,
           trustedResultCount: evidenceEval.trustedCount,
           contextBlock: context.xmlBlock,
+          vaultResolutionUsed: vaultResolution.used,
+          resolvedEntityTypes: vaultResolution.resolvedEntityTypes,
+          resolvedEntityCount: vaultResolution.resolvedEntityCount,
+          hasAmbiguity: vaultResolution.hasAmbiguity,
+          ambiguousItems: vaultResolution.ambiguousItems,
         };
       }
     }
@@ -223,11 +281,16 @@ export class ResearchOrchestrator {
       rawQueriesToRun.push(intentAnalysis.domainTargetedQueries[1]);
     }
 
+    const knownEntityNames = [
+      ...vaultResolution.resolvedEntities.map((e: any) => e.name),
+      ...intentAnalysis.entities,
+    ];
+
     // Server-side privacy minimization & PII redaction on all search queries
     const queriesToRun = Array.from(
       new Set(
         rawQueriesToRun
-          .map((q) => QuerySanitizer.sanitizeAndMinimize(q))
+          .map((q) => QuerySanitizer.sanitizeAndMinimize(q, knownEntityNames))
           .filter((q) => q.length > 0)
       )
     );
@@ -277,6 +340,11 @@ export class ResearchOrchestrator {
         rankedResultCount: 0,
         trustedResultCount: 0,
         errorMessage: lastErrorDetail || "Nenhum resultado retornado pelos provedores de busca.",
+        vaultResolutionUsed: vaultResolution.used,
+        resolvedEntityTypes: vaultResolution.resolvedEntityTypes,
+        resolvedEntityCount: vaultResolution.resolvedEntityCount,
+        hasAmbiguity: vaultResolution.hasAmbiguity,
+        ambiguousItems: vaultResolution.ambiguousItems,
       };
     }
 
@@ -306,6 +374,11 @@ export class ResearchOrchestrator {
         rankedResultCount,
         trustedResultCount: evidenceEval.trustedCount,
         errorMessage: evidenceEval.evidenceCaveat || "Fontes obtidas não atingem o limiar de evidência clínica exigido.",
+        vaultResolutionUsed: vaultResolution.used,
+        resolvedEntityTypes: vaultResolution.resolvedEntityTypes,
+        resolvedEntityCount: vaultResolution.resolvedEntityCount,
+        hasAmbiguity: vaultResolution.hasAmbiguity,
+        ambiguousItems: vaultResolution.ambiguousItems,
       };
     }
 
@@ -314,6 +387,9 @@ export class ResearchOrchestrator {
 
     // 11. Build XML Context Block
     const context = ResearchContextBuilder.buildContext(rankedSources, runId);
+    if (vaultResolution.hasAmbiguity && vaultResolution.ambiguousItems) {
+      context.xmlBlock += `\n<!-- VAULT_AMBIGUITY_NOTE: Patient has multiple active medications (${vaultResolution.ambiguousItems.join(", ")}). Research queries covered each active medication. Advise patient on each or request clarification if necessary. -->\n`;
+    }
 
     return {
       runId,
@@ -332,6 +408,11 @@ export class ResearchOrchestrator {
       rankedResultCount,
       trustedResultCount: evidenceEval.trustedCount,
       contextBlock: context.xmlBlock,
+      vaultResolutionUsed: vaultResolution.used,
+      resolvedEntityTypes: vaultResolution.resolvedEntityTypes,
+      resolvedEntityCount: vaultResolution.resolvedEntityCount,
+      hasAmbiguity: vaultResolution.hasAmbiguity,
+      ambiguousItems: vaultResolution.ambiguousItems,
     };
   }
 }

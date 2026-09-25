@@ -94,7 +94,7 @@ export class QuerySanitizer {
    * Example: "Eu uso semaglutida e tive náusea depois de comer; qual guideline recente?"
    * -> "semaglutide nausea clinical guideline current"
    */
-  static sanitizeAndMinimize(rawQuery: string): string {
+  static sanitizeAndMinimize(rawQuery: string, knownEntities?: string[]): string {
     if (!rawQuery) return "";
 
     // 1. Redact PII first
@@ -103,12 +103,18 @@ export class QuerySanitizer {
 
     // 2. Extract clinical entities if present
     const entityMatches = lower.match(
-      /\b(retatrutide|retatrutida|tirzepatide|tirzepatida|semaglutide|semaglutida|ozempic|wegovy|mounjaro|zepbound|metformin|metformina|creatine|creatina|berberine|berberina|cagrilintide|bpc-157|tb-500|slu-pp-332|mots-c)\b/gi
+      /\b(retatrutide|retatrutida|tirzepatide|tirzepatida|semaglutide|semaglutida|ozempic|wegovy|mounjaro|zepbound|metformin|metformina|creatine|creatina|berberine|berberina|cagrilintide|bpc-157|tb-500|slu-pp-332|mots-c|atorvastatin|atorvastatina|rosuvastatin|rosuvastatina|losartan|losartana|levothyroxine|levotiroxina|lisinopril|amlodipine|anlodipino|omeprazole|omeprazol|dapagliflozin|empagliflozin|aspirin|aspirina)\b/gi
     ) || [];
+
+    const extraKnown = (knownEntities || [])
+      .map((k) => k.toLowerCase().trim())
+      .filter((k) => k.length > 2 && lower.includes(k));
+
+    const combinedEntities = Array.from(new Set([...entityMatches, ...extraKnown]));
 
     const entities = Array.from(
       new Set(
-        entityMatches.map((e) => {
+        combinedEntities.map((e) => {
           const l = e.toLowerCase();
           if (l === "retatrutida") return "retatrutide";
           if (l === "tirzepatida") return "tirzepatide";
@@ -116,15 +122,24 @@ export class QuerySanitizer {
           if (l === "metformina") return "metformin";
           if (l === "creatina") return "creatine";
           if (l === "berberina") return "berberine";
+          if (l === "atorvastatina") return "atorvastatin";
+          if (l === "rosuvastatina") return "rosuvastatin";
+          if (l === "losartana") return "losartan";
+          if (l === "levotiroxina") return "levothyroxine";
+          if (l === "anlodipino") return "amlodipine";
+          if (l === "omeprazol") return "omeprazole";
+          if (l === "aspirina") return "aspirin";
           return l;
         })
       )
     );
 
     // 3. Extract symptoms / conditions
+    const textWithoutSite = lower.replace(/\bsite:[a-z0-9.-]+/gi, " ");
     const symptoms: string[] = [];
     for (const [key, normalized] of Object.entries(CLINICAL_SYMPTOM_MAP)) {
-      if (lower.includes(key) && !symptoms.includes(normalized)) {
+      const regex = new RegExp(`\\b${key}\\b`, "i");
+      if (regex.test(textWithoutSite) && !symptoms.includes(normalized)) {
         symptoms.push(normalized);
       }
     }
@@ -132,7 +147,8 @@ export class QuerySanitizer {
     // 4. Extract focus terms
     const focusTerms: string[] = [];
     for (const [key, term] of Object.entries(FOCUS_KEYWORDS)) {
-      if (lower.includes(key) && !focusTerms.includes(term)) {
+      const regex = new RegExp(`\\b${key}\\b`, "i");
+      if (regex.test(textWithoutSite) && !focusTerms.includes(term)) {
         focusTerms.push(term);
       }
     }

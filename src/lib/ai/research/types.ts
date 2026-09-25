@@ -76,6 +76,31 @@ export interface ResearchIntentAnalysis {
   entities: string[];
   reason: string;
   isClinicalSafetyQuery?: boolean;
+  vaultResolutionUsed?: boolean;
+  resolvedEntityTypes?: string[];
+  resolvedEntityCount?: number;
+  hasAmbiguity?: boolean;
+  ambiguousItems?: string[];
+}
+
+export interface ResolvedVaultEntity {
+  type: "medication" | "diet" | "metric";
+  name: string;
+  dose?: string;
+  form?: string;
+  details?: string;
+}
+
+export interface VaultResolutionResult {
+  used: boolean;
+  resolvedEntities: ResolvedVaultEntity[];
+  resolvedEntityTypes: string[];
+  resolvedEntityCount: number;
+  hasAmbiguity: boolean;
+  ambiguityType?: "MULTIPLE_ACTIVE_MEDICATIONS";
+  ambiguousItems?: string[];
+  suggestedQueries: string[];
+  domainTargetedQueries: string[];
 }
 
 export interface ResearchContext {
@@ -104,6 +129,11 @@ export interface ResearchExecutionResult {
   providersAttempted?: string[];
   contextBlock?: string;
   errorMessage?: string;
+  vaultResolutionUsed?: boolean;
+  resolvedEntityTypes?: string[];
+  resolvedEntityCount?: number;
+  hasAmbiguity?: boolean;
+  ambiguousItems?: string[];
 }
 
 export interface ResearchMetadata {
@@ -116,6 +146,11 @@ export interface ResearchMetadata {
   providersAttempted?: string[];
   rawResultCount?: number;
   sourcesCount: number;
+  vaultResolutionUsed?: boolean;
+  resolvedEntityTypes?: string[];
+  resolvedEntityCount?: number;
+  hasAmbiguity?: boolean;
+  ambiguousItems?: string[];
   sources?: Array<{
     id: string;
     title: string;

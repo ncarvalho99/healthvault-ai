@@ -147,6 +147,7 @@ export async function POST(req: NextRequest) {
     // 4.5. Web-First Research Preflight (Mandatory for 'exploit', auto for others)
     const webResearchPolicy = resolveWebResearchPolicy(activeModel);
     const researchResult = await ResearchOrchestrator.execute({
+      userId: user!.userId,
       userMessage: content,
       modelId: activeModel,
       agentMode,
@@ -172,6 +173,10 @@ export async function POST(req: NextRequest) {
           latencyMs: researchResult.latencyMs,
           status: researchResult.status,
           reasonCode: researchResult.reasonCode,
+          vaultResolutionUsed: researchResult.vaultResolutionUsed,
+          resolvedEntityTypes: researchResult.resolvedEntityTypes,
+          resolvedEntityCount: researchResult.resolvedEntityCount,
+          hasAmbiguity: researchResult.hasAmbiguity,
         },
       });
     }
@@ -379,6 +384,11 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
                 researchPolicy: webResearchPolicy,
                 researchProvider: researchResult.provider,
                 researchSourcesCount: researchResult.sources.length,
+                vaultResolutionUsed: researchResult.vaultResolutionUsed,
+                resolvedEntityTypes: researchResult.resolvedEntityTypes,
+                resolvedEntityCount: researchResult.resolvedEntityCount,
+                hasAmbiguity: researchResult.hasAmbiguity,
+                ambiguousItems: researchResult.ambiguousItems,
                 sources: researchResult.sources.map((s) => ({
                   id: s.id,
                   title: s.title,
@@ -394,6 +404,17 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
         },
       },
     });
+
+    // Associate assistant messageId with all pending/executed tool executions from this turn
+    const executionIds = executedToolsList
+      .map((t) => t.output?.execution_id)
+      .filter(Boolean);
+    if (executionIds.length > 0) {
+      await db.aiToolExecution.updateMany({
+        where: { id: { in: executionIds } },
+        data: { messageId: assistantRecord.id },
+      });
+    }
 
     await logAudit({
       userId: user!.userId,
@@ -417,6 +438,19 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
       userMessage,
       message: assistantRecord,
       toolExecutions: executedToolsList,
+      research: {
+        used: researchResult.status === "SUCCESS" && researchResult.sources.length > 0,
+        policy: webResearchPolicy,
+        status: researchResult.status,
+        reasonCode: researchResult.reasonCode,
+        provider: researchResult.provider,
+        sourcesCount: researchResult.sources.length,
+        vaultResolutionUsed: researchResult.vaultResolutionUsed,
+        resolvedEntityTypes: researchResult.resolvedEntityTypes,
+        resolvedEntityCount: researchResult.resolvedEntityCount,
+        hasAmbiguity: researchResult.hasAmbiguity,
+        ambiguousItems: researchResult.ambiguousItems,
+      },
     });
   } catch (error: any) {
     console.error("AI Chat Error:", error);

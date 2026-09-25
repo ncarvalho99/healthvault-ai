@@ -213,7 +213,9 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
         body: JSON.stringify({ action }),
       });
 
-      if (res.ok) {
+      const data = await res.json().catch(() => null);
+
+      if (res.ok && data?.success) {
         showToast(action === "approve" ? "Ação aprovada e aplicada no HealthVault!" : "Ação rejeitada.");
         setMessages((prev) =>
           prev.map((m) => {
@@ -230,6 +232,8 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
                             ...e.output,
                             requires_approval: false,
                             resolvedAction: action,
+                            success: data.status === "EXECUTED",
+                            data: data.result || e.output?.data,
                           },
                         }
                       : e
@@ -245,7 +249,54 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
           onUpdateConversation();
         }
       } else {
-        showToast("Erro ao processar aprovação.", "error");
+        const errorMsg =
+          data?.error ||
+          (res.status === 410
+            ? "Esta proposta expirou."
+            : res.status === 409
+            ? "Conflito de versão no registro."
+            : "Erro ao processar aprovação.");
+        showToast(errorMsg, "error");
+
+        if (
+          data?.code === "VERSION_CONFLICT" ||
+          data?.code === "PROPOSAL_EXPIRED" ||
+          res.status === 409 ||
+          res.status === 410
+        ) {
+          const resolvedAction =
+            data?.code === "PROPOSAL_EXPIRED" || res.status === 410
+              ? "expired"
+              : "conflict";
+
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.metadata?.toolExecutions && Array.isArray(m.metadata.toolExecutions)) {
+                return {
+                  ...m,
+                  metadata: {
+                    ...m.metadata,
+                    toolExecutions: m.metadata.toolExecutions.map((e: any) =>
+                      e.output?.execution_id === executionId
+                        ? {
+                            ...e,
+                            output: {
+                              ...e.output,
+                              requires_approval: false,
+                              resolvedAction,
+                              errorMessage: data?.error,
+                              errorCode: data?.code,
+                            },
+                          }
+                        : e
+                    ),
+                  },
+                };
+              }
+              return m;
+            })
+          );
+        }
       }
     } catch (err: any) {
       showToast("Falha: " + err.message, "error");

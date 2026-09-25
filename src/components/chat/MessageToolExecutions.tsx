@@ -151,6 +151,44 @@ export function MessageToolExecutions({
           );
         }
 
+        if (wasResolved === "conflict") {
+          return (
+            <div
+              key={idx}
+              className="p-3 rounded-xl bg-red-950/60 border border-red-800/60 text-xs text-red-200 flex items-start gap-2.5 animate-in fade-in"
+            >
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold block text-red-100">
+                  Conflito de Versão: {friendlyName}
+                </span>
+                <span className="text-[11px] text-red-300">
+                  {out.errorMessage || "Este registro clínico foi modificado por outra operação após a criação desta proposta. Gere uma nova proposta."}
+                </span>
+              </div>
+            </div>
+          );
+        }
+
+        if (wasResolved === "expired") {
+          return (
+            <div
+              key={idx}
+              className="p-3 rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-300 flex items-start gap-2.5 animate-in fade-in"
+            >
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold block text-slate-200">
+                  Proposta Expirada: {friendlyName}
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  {out.errorMessage || "O prazo de validade desta proposta expirou. Solicite ao assistente uma nova proposta atualizada."}
+                </span>
+              </div>
+            </div>
+          );
+        }
+
         if (wasResolved === "reject") {
           return (
             <div
@@ -163,7 +201,7 @@ export function MessageToolExecutions({
           );
         }
 
-        if (wasResolved === "approve" || out.success) {
+        if (wasResolved === "approve" || (out.success && !isPending)) {
           /* Card: Mutation executed successfully */
           return (
             <div
