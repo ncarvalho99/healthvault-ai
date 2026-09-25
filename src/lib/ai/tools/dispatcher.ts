@@ -134,6 +134,15 @@ export class ToolDispatcher {
       let targetEntityId: string | undefined = undefined;
       let entityType: string = tool.category;
 
+      const EXISTING_ENTITY_MUTATION_TOOLS = [
+        "healthvault_update_medication",
+        "healthvault_stop_medication",
+        "healthvault_update_diet",
+        "healthvault_update_recommendation",
+      ];
+
+      const isExistingEntityMutation = EXISTING_ENTITY_MUTATION_TOOLS.includes(tool.name);
+
       if (tool.name === "healthvault_update_medication" || tool.name === "healthvault_stop_medication") {
         const medId = validation.data.medication_id;
         let med = await db.medication.findFirst({
@@ -170,6 +179,17 @@ export class ToolDispatcher {
           entityVersionAtProposal = rec.currentVersion;
           entityType = "recommendation";
         }
+      }
+
+      // Strict proposal binding: operations on existing entities MUST resolve targetEntityId and entityVersionAtProposal
+      if (isExistingEntityMutation && (!targetEntityId || entityVersionAtProposal === undefined)) {
+        return {
+          success: false,
+          error: {
+            code: "TARGET_NOT_FOUND",
+            message: `TARGET_NOT_FOUND: Não foi possível identificar o registro alvo para ${tool.name}.`,
+          },
+        };
       }
 
       const ttlMinutes = parseInt(process.env.AI_APPROVAL_TTL_MINUTES || "60", 10);

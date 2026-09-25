@@ -21,6 +21,8 @@ describe("Agent Tool Execution & Approval Runtime Integrity", () => {
   const origMsgUpdate = db.message.update;
   const origTransaction = db.$transaction;
 
+  (db.auditLog.create as any) = async () => ({ id: "audit-mock-id" });
+
   after(() => {
     db.auditLog.create = origAuditCreate;
     db.user.findUnique = origUserFindUnique;
@@ -191,6 +193,9 @@ describe("Agent Tool Execution & Approval Runtime Integrity", () => {
         medication_id: "med-active-99",
         reason: "Paciente atingiu meta terapêutica",
         _proposalMeta: {
+          entityId: "med-active-99",
+          entityType: "medication",
+          entityVersionAtProposal: 1,
           expiresAt: new Date(Date.now() + 86400000).toISOString(),
         },
       },
@@ -229,8 +234,16 @@ describe("Agent Tool Execution & Approval Runtime Integrity", () => {
           },
         },
         medication: {
+          findUnique: async () => ({
+            id: "med-active-99",
+            userId: "user-stop-test",
+            name: "Ozempic",
+            isActive: true,
+            versions: [{ versionNumber: 1, doseValue: 0.5, doseUnit: "mg" }],
+          }),
           findFirst: async () => ({
             id: "med-active-99",
+            userId: "user-stop-test",
             name: "Ozempic",
             isActive: true,
             versions: [{ versionNumber: 1, doseValue: 0.5, doseUnit: "mg" }],
@@ -692,9 +705,9 @@ describe("Agent Tool Execution & Approval Runtime Integrity", () => {
     const token = await createSessionToken({ userId: "user-diet-binding", username: "clinician", role: "USER" });
 
     // Diet A (original target of proposal)
-    const dietA = { id: "diet-plan-A", title: "Dieta Antiga", currentVersion: 1, isActive: true };
+    const dietA = { id: "diet-plan-A", userId: "user-diet-binding", title: "Dieta Antiga", currentVersion: 1, isActive: true };
     // Diet B (newer, most recent active diet)
-    const dietB = { id: "diet-plan-B", title: "Dieta Nova", currentVersion: 1, isActive: true };
+    const dietB = { id: "diet-plan-B", userId: "user-diet-binding", title: "Dieta Nova", currentVersion: 1, isActive: true };
 
     let persistedExecution: any = {
       id: "exec-diet-binding",
@@ -905,6 +918,7 @@ describe("Agent Tool Execution & Approval Runtime Integrity", () => {
         medication: {
           findUnique: async () => ({
             id: "med-stop-uuid-777",
+            userId: "user-stop-conflict",
             name: "Ozempic",
             versions: [{ versionNumber: 2 }], // In DB version moved to 2!
           }),
@@ -955,8 +969,8 @@ describe("Agent Tool Execution & Approval Runtime Integrity", () => {
     const token = await createSessionToken({ userId: "user-dup-med", username: "clinician", role: "USER" });
 
     // Two medications with identical names in DB
-    const medA = { id: "med-uuid-A", name: "Ozempic", versions: [{ versionNumber: 1, doseValue: 0.25, doseUnit: "mg" }] };
-    const medB = { id: "med-uuid-B", name: "Ozempic", versions: [{ versionNumber: 1, doseValue: 1.0, doseUnit: "mg" }] };
+    const medA = { id: "med-uuid-A", userId: "user-dup-med", name: "Ozempic", versions: [{ versionNumber: 1, doseValue: 0.25, doseUnit: "mg" }] };
+    const medB = { id: "med-uuid-B", userId: "user-dup-med", name: "Ozempic", versions: [{ versionNumber: 1, doseValue: 1.0, doseUnit: "mg" }] };
 
     let persistedExecution: any = {
       id: "exec-dup-med",
@@ -1052,5 +1066,298 @@ describe("Agent Tool Execution & Approval Runtime Integrity", () => {
 
     // CRITICAL: Must have updated medA (the proposal target), NEVER medB!
     assert.strictEqual(updatedMedicationId, "med-uuid-A", "Must bind strictly to _proposalMeta.entityId, ignoring duplicate name lookups");
+  });
+
+  it("13. update medication target inexistente → nenhuma PENDING_APPROVAL criada", async () => {
+    let pendingApprovalCreated = false;
+
+    const origExecCreate = db.aiToolExecution.create;
+    const origExecFindFirst = db.aiToolExecution.findFirst;
+    const origMedFindFirst = db.medication.findFirst;
+    const origPolicyFindUnique = db.aiWritePolicy.findUnique;
+
+    (db.aiToolExecution.findFirst as any) = async () => null;
+    (db.aiWritePolicy.findUnique as any) = async () => ({ dosageChanges: "REVIEW_FIRST", medications: "REVIEW_FIRST" });
+    (db.aiToolExecution.create as any) = async () => {
+      pendingApprovalCreated = true;
+      return { id: "should-not-exist" };
+    };
+    (db.medication.findFirst as any) = async () => null; // Medication does not exist!
+
+    try {
+      const res = await ToolDispatcher.execute({
+        userId: "user-target-nf",
+        conversationId: "conv-1",
+        toolCallId: "call_upd_nf",
+        toolName: "healthvault_update_medication",
+        rawArguments: JSON.stringify({
+          medication_id: "remedio_fantasma_xyz",
+          dose_value: 10,
+          reason: "Ajuste clínico",
+        }),
+      });
+
+      assert.strictEqual(res.success, false);
+      assert.strictEqual(res.error?.code, "TARGET_NOT_FOUND");
+      assert.strictEqual(pendingApprovalCreated, false, "Must NOT create any PENDING_APPROVAL execution when target is not found");
+    } finally {
+      db.aiToolExecution.create = origExecCreate;
+      db.aiToolExecution.findFirst = origExecFindFirst;
+      db.medication.findFirst = origMedFindFirst;
+      db.aiWritePolicy.findUnique = origPolicyFindUnique;
+    }
+  });
+
+  it("14. stop medication target inexistente → nenhuma PENDING_APPROVAL criada", async () => {
+    let pendingApprovalCreated = false;
+
+    const origExecCreate = db.aiToolExecution.create;
+    const origExecFindFirst = db.aiToolExecution.findFirst;
+    const origMedFindFirst = db.medication.findFirst;
+    const origPolicyFindUnique = db.aiWritePolicy.findUnique;
+
+    (db.aiToolExecution.findFirst as any) = async () => null;
+    (db.aiWritePolicy.findUnique as any) = async () => ({ medications: "REVIEW_FIRST" });
+    (db.aiToolExecution.create as any) = async () => {
+      pendingApprovalCreated = true;
+      return { id: "should-not-exist" };
+    };
+    (db.medication.findFirst as any) = async () => null; // Medication does not exist!
+
+    try {
+      const res = await ToolDispatcher.execute({
+        userId: "user-target-nf",
+        conversationId: "conv-1",
+        toolCallId: "call_stop_nf",
+        toolName: "healthvault_stop_medication",
+        rawArguments: JSON.stringify({
+          medication_id: "remedio_inexistente_123",
+          reason: "Parar",
+        }),
+      });
+
+      assert.strictEqual(res.success, false);
+      assert.strictEqual(res.error?.code, "TARGET_NOT_FOUND");
+      assert.strictEqual(pendingApprovalCreated, false, "Must NOT create any PENDING_APPROVAL execution when stop target is missing");
+    } finally {
+      db.aiToolExecution.create = origExecCreate;
+      db.aiToolExecution.findFirst = origExecFindFirst;
+      db.medication.findFirst = origMedFindFirst;
+      db.aiWritePolicy.findUnique = origPolicyFindUnique;
+    }
+  });
+
+  it("15. update diet sem plano alvo → nenhuma proposal de update criada", async () => {
+    let pendingApprovalCreated = false;
+
+    const origExecCreate = db.aiToolExecution.create;
+    const origExecFindFirst = db.aiToolExecution.findFirst;
+    const origDietFindFirst = db.dietPlan.findFirst;
+    const origPolicyFindUnique = db.aiWritePolicy.findUnique;
+
+    (db.aiToolExecution.findFirst as any) = async () => null;
+    (db.aiWritePolicy.findUnique as any) = async () => ({ nutrition: "REVIEW_FIRST" });
+    (db.aiToolExecution.create as any) = async () => {
+      pendingApprovalCreated = true;
+      return { id: "should-not-exist" };
+    };
+    (db.dietPlan.findFirst as any) = async () => null; // No diet plan exists!
+
+    try {
+      const res = await ToolDispatcher.execute({
+        userId: "user-target-nf",
+        conversationId: "conv-1",
+        toolCallId: "call_diet_nf",
+        toolName: "healthvault_update_diet",
+        rawArguments: JSON.stringify({
+          target_calories: 2000,
+          target_protein_g: 150,
+          target_carbs_g: 200,
+          target_fat_g: 60,
+          reason: "Ajuste calórico",
+        }),
+      });
+
+      assert.strictEqual(res.success, false);
+      assert.strictEqual(res.error?.code, "TARGET_NOT_FOUND");
+      assert.strictEqual(pendingApprovalCreated, false, "Must NOT create any proposal when target diet plan does not exist");
+    } finally {
+      db.aiToolExecution.create = origExecCreate;
+      db.aiToolExecution.findFirst = origExecFindFirst;
+      db.dietPlan.findFirst = origDietFindFirst;
+      db.aiWritePolicy.findUnique = origPolicyFindUnique;
+    }
+  });
+
+  it("16. legacy proposal sem entityId → INVALID_PROPOSAL_BINDING → não faz lookup por nome", async () => {
+    const token = await createSessionToken({ userId: "user-legacy", username: "clinician", role: "USER" });
+
+    let persistedExecution: any = {
+      id: "exec-legacy-no-id",
+      userId: "user-legacy",
+      conversationId: "conv-legacy",
+      messageId: "msg-legacy",
+      toolCallId: "call_legacy",
+      toolName: "healthvault_update_medication",
+      status: "PENDING_APPROVAL",
+      requiresApproval: true,
+      inputJson: {
+        medication_id: "Ozempic",
+        dose_value: 1.0,
+        _proposalMeta: {
+          // Missing entityId!
+          entityType: "medication",
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        },
+      },
+    };
+
+    let persistedMessage: any = {
+      id: "msg-legacy",
+      conversationId: "conv-legacy",
+      senderType: "AI",
+      metadata: {
+        toolExecutions: [
+          { toolCallId: "call_legacy", output: { requires_approval: true, execution_id: "exec-legacy-no-id" } },
+        ],
+      },
+    };
+
+    let nameLookupPerformed = false;
+
+    (db.user.findUnique as any) = async () => ({ id: "user-legacy", username: "clinician", role: "USER" });
+    (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
+
+    (db.$transaction as any) = async (callback: any) => {
+      const tx = {
+        aiToolExecution: {
+          updateMany: async () => ({ count: 1 }),
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
+        medication: {
+          findFirst: async () => {
+            nameLookupPerformed = true;
+            return { id: "med-fallback", name: "Ozempic" };
+          },
+        },
+        message: {
+          findUnique: async () => persistedMessage,
+          findMany: async () => [persistedMessage],
+          update: async ({ data }: any) => {
+            persistedMessage = { ...persistedMessage, ...data };
+            return persistedMessage;
+          },
+        },
+        auditLog: { create: async () => ({ id: "a" }) },
+      };
+      return await callback(tx);
+    };
+
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-legacy-no-id/approve", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "approve" }),
+    });
+
+    const res = await POST(req, { params: { id: "exec-legacy-no-id" } });
+    const body = await res.json();
+
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(body.code, "INVALID_PROPOSAL_BINDING");
+    assert.strictEqual(nameLookupPerformed, false, "Must NEVER fall back to name lookup for legacy proposal lacking entityId");
+    assert.strictEqual(persistedExecution.status, "FAILED");
+    assert.strictEqual(persistedExecution.errorCode, "INVALID_PROPOSAL_BINDING");
+  });
+
+  it("17. entidade removida depois da proposta → TARGET_NOT_FOUND terminal → nenhuma outra entidade é escolhida", async () => {
+    const token = await createSessionToken({ userId: "user-deleted-target", username: "clinician", role: "USER" });
+
+    // Proposal was bound to med-deleted-target
+    let persistedExecution: any = {
+      id: "exec-deleted-target",
+      userId: "user-deleted-target",
+      conversationId: "conv-del",
+      messageId: "msg-del",
+      toolCallId: "call_del",
+      toolName: "healthvault_update_medication",
+      status: "PENDING_APPROVAL",
+      requiresApproval: true,
+      inputJson: {
+        medication_id: "Ozempic",
+        dose_value: 1.0,
+        _proposalMeta: {
+          entityId: "med-deleted-target",
+          entityType: "medication",
+          entityVersionAtProposal: 1,
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        },
+      },
+    };
+
+    let persistedMessage: any = {
+      id: "msg-del",
+      conversationId: "conv-del",
+      senderType: "AI",
+      metadata: {
+        toolExecutions: [
+          { toolCallId: "call_del", output: { requires_approval: true, execution_id: "exec-deleted-target" } },
+        ],
+      },
+    };
+
+    let anotherEntityChosen = false;
+
+    (db.user.findUnique as any) = async () => ({ id: "user-deleted-target", username: "clinician", role: "USER" });
+    (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
+
+    (db.$transaction as any) = async (callback: any) => {
+      const tx = {
+        aiToolExecution: {
+          updateMany: async () => ({ count: 1 }),
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
+        medication: {
+          findUnique: async () => null, // Entity was deleted from DB!
+          findFirst: async () => {
+            anotherEntityChosen = true; // Would represent incorrect fallback
+            return { id: "another-med", name: "Ozempic" };
+          },
+          update: async () => {
+            anotherEntityChosen = true;
+          },
+        },
+        message: {
+          findUnique: async () => persistedMessage,
+          findMany: async () => [persistedMessage],
+          update: async ({ data }: any) => {
+            persistedMessage = { ...persistedMessage, ...data };
+            return persistedMessage;
+          },
+        },
+        auditLog: { create: async () => ({ id: "a" }) },
+      };
+      return await callback(tx);
+    };
+
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-deleted-target/approve", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "approve" }),
+    });
+
+    const res = await POST(req, { params: { id: "exec-deleted-target" } });
+    const body = await res.json();
+
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(body.code, "TARGET_NOT_FOUND");
+    assert.strictEqual(anotherEntityChosen, false, "Must NEVER choose another entity when target was deleted");
+    assert.strictEqual(persistedExecution.status, "FAILED");
+    assert.strictEqual(persistedExecution.errorCode, "TARGET_NOT_FOUND");
   });
 });
