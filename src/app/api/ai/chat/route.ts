@@ -12,6 +12,7 @@ import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
 import { AssistantResponseProcessor } from "@/lib/ai/response/assistant-response-processor";
 import { resolveResearchPolicy as resolveWebResearchPolicy } from "@/lib/ai/research/research-policy";
 import { ResearchOrchestrator } from "@/lib/ai/research/research-orchestrator";
+import { EvidenceConsistencyGate } from "@/lib/ai/response/evidence-consistency-gate";
 import { logAudit } from "@/lib/audit";
 import { SenderType } from "@prisma/client";
 
@@ -252,6 +253,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
     const executedToolsList: any[] = [];
     let currentMessages = [...contextMessages];
     const callSignatures = new Set<string>();
+    let hasRegeneratedForConsistency = false;
 
     while (iteration < MAX_TOOL_ITERATIONS) {
       iteration++;
@@ -354,6 +356,50 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
       const processed = AssistantResponseProcessor.process(assistantMsg, activeModel, reasoningPolicy, completion?.usage);
       finalAssistantText = processed.cleanContent || "Ação processada com sucesso.";
       finalResponseMetadata = processed.metadata;
+
+      // 6.5 Evidence Consistency Gate: validate clinical consistency before accepting response
+      if (
+        researchResult.status === "SUCCESS" &&
+        researchResult.sources.length > 0 &&
+        !hasRegeneratedForConsistency &&
+        iteration < MAX_TOOL_ITERATIONS
+      ) {
+        const consistency = EvidenceConsistencyGate.evaluate({
+          userMessage: content,
+          assistantText: finalAssistantText,
+          sources: researchResult.sources,
+          vaultContextBlock: contextMessages.find((m) => m.role === "system" && m.content?.includes("<healthvault_data>"))?.content,
+          conversationHistory: currentMessages,
+        });
+
+        if (!consistency.isValid) {
+          hasRegeneratedForConsistency = true;
+          await logAudit({
+            userId: user!.userId,
+            action: "AI_EVIDENCE_CONSISTENCY_GATE_FAILED",
+            entity: "CONVERSATION",
+            entityId: conversationId,
+            metadata: {
+              violations: consistency.violations,
+              model: activeModel,
+              correlationId,
+            },
+          });
+
+          // Inject correction feedback and run single regeneration
+          currentMessages.push({
+            role: "assistant",
+            content: finalAssistantText,
+          });
+          currentMessages.push({
+            role: "system",
+            content: `[CLINICAL EVIDENCE CORRECTION REQUIRED]:
+${consistency.remediationPrompt}`,
+          });
+
+          continue;
+        }
+      }
       break;
     }
 
