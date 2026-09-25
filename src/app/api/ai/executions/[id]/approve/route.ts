@@ -13,16 +13,19 @@ const approvalSchema = z.object({
   action: z.enum(["approve", "reject"]),
 });
 
-async function syncMessageToolExecution(params: {
-  conversationId: string;
-  messageId?: string | null;
-  executionId: string;
-  toolCallId: string;
-  action: "approve" | "reject" | "expired" | "conflict";
-  outputResult?: any;
-  errorCode?: string;
-  errorMessage?: string;
-}) {
+async function syncMessageToolExecution(
+  client: any,
+  params: {
+    conversationId: string;
+    messageId?: string | null;
+    executionId: string;
+    toolCallId: string;
+    action: "approve" | "reject" | "expired" | "conflict";
+    outputResult?: any;
+    errorCode?: string;
+    errorMessage?: string;
+  }
+) {
   const {
     conversationId,
     messageId,
@@ -35,18 +38,18 @@ async function syncMessageToolExecution(params: {
   } = params;
 
   let message = messageId
-    ? await db.message.findUnique({ where: { id: messageId } })
+    ? await client.message.findUnique({ where: { id: messageId } })
     : null;
 
   if (!message) {
-    const messages = await db.message.findMany({
+    const messages = await client.message.findMany({
       where: { conversationId, senderType: SenderType.AI },
       orderBy: { createdAt: "desc" },
       take: 10,
     });
 
     message =
-      messages.find((m) => {
+      messages.find((m: any) => {
         const tools = (m.metadata as any)?.toolExecutions;
         return (
           Array.isArray(tools) &&
@@ -121,7 +124,7 @@ async function syncMessageToolExecution(params: {
   });
 
   if (matched) {
-    await db.message.update({
+    await client.message.update({
       where: { id: message.id },
       data: {
         metadata: {
@@ -169,20 +172,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const meta = args._proposalMeta;
 
     if (action === "reject") {
-      const updated = await db.aiToolExecution.update({
-        where: { id: execution.id },
-        data: {
-          status: "REJECTED",
-          completedAt: new Date(),
-        },
-      });
+      await db.$transaction(async (tx) => {
+        await tx.aiToolExecution.update({
+          where: { id: execution.id },
+          data: {
+            status: "REJECTED",
+            completedAt: new Date(),
+          },
+        });
 
-      await syncMessageToolExecution({
-        conversationId: execution.conversationId,
-        messageId: execution.messageId,
-        executionId: execution.id,
-        toolCallId: execution.toolCallId,
-        action: "reject",
+        await syncMessageToolExecution(tx, {
+          conversationId: execution.conversationId,
+          messageId: execution.messageId,
+          executionId: execution.id,
+          toolCallId: execution.toolCallId,
+          action: "reject",
+        });
       });
 
       await logAudit({
@@ -200,22 +205,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (meta?.expiresAt) {
       const isExpired = new Date() > new Date(meta.expiresAt);
       if (isExpired) {
-        await db.aiToolExecution.update({
-          where: { id: execution.id },
-          data: { status: "EXPIRED", completedAt: new Date() },
-        });
-
         const expiredMsg =
           "Esta proposta de alteração expirou. Solicite ao assistente uma nova proposta atualizada.";
 
-        await syncMessageToolExecution({
-          conversationId: execution.conversationId,
-          messageId: execution.messageId,
-          executionId: execution.id,
-          toolCallId: execution.toolCallId,
-          action: "expired",
-          errorCode: "PROPOSAL_EXPIRED",
-          errorMessage: expiredMsg,
+        await db.$transaction(async (tx) => {
+          await tx.aiToolExecution.update({
+            where: { id: execution.id },
+            data: {
+              status: "FAILED",
+              errorCode: "PROPOSAL_EXPIRED",
+              errorMessage: expiredMsg,
+              completedAt: new Date(),
+            },
+          });
+
+          await syncMessageToolExecution(tx, {
+            conversationId: execution.conversationId,
+            messageId: execution.messageId,
+            executionId: execution.id,
+            toolCallId: execution.toolCallId,
+            action: "expired",
+            errorCode: "PROPOSAL_EXPIRED",
+            errorMessage: expiredMsg,
+          });
         });
 
         await logAudit({
@@ -246,15 +258,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         const currentVersion = currentMed?.versions[0]?.versionNumber;
         if (currentVersion !== undefined && currentVersion !== meta.entityVersionAtProposal) {
           const conflictMsg = `Conflito de versão: este medicamento foi alterado (v${meta.entityVersionAtProposal} → v${currentVersion}) após a criação da proposta. Gere uma nova proposta.`;
-          await syncMessageToolExecution({
-            conversationId: execution.conversationId,
-            messageId: execution.messageId,
-            executionId: execution.id,
-            toolCallId: execution.toolCallId,
-            action: "conflict",
-            errorCode: "VERSION_CONFLICT",
-            errorMessage: conflictMsg,
+
+          await db.$transaction(async (tx) => {
+            await tx.aiToolExecution.update({
+              where: { id: execution.id },
+              data: {
+                status: "FAILED",
+                errorCode: "VERSION_CONFLICT",
+                errorMessage: conflictMsg,
+                completedAt: new Date(),
+              },
+            });
+
+            await syncMessageToolExecution(tx, {
+              conversationId: execution.conversationId,
+              messageId: execution.messageId,
+              executionId: execution.id,
+              toolCallId: execution.toolCallId,
+              action: "conflict",
+              errorCode: "VERSION_CONFLICT",
+              errorMessage: conflictMsg,
+            });
           });
+
+          await logAudit({
+            userId: user!.userId,
+            action: "AI_TOOL_VERSION_CONFLICT",
+            entity: "AI_TOOL_EXECUTION",
+            entityId: execution.id,
+            metadata: { toolName: execution.toolName, currentVersion, proposalVersion: meta.entityVersionAtProposal },
+          });
+
           return NextResponse.json(
             {
               error: conflictMsg,
@@ -269,15 +303,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         });
         if (currentDiet && currentDiet.currentVersion !== meta.entityVersionAtProposal) {
           const conflictMsg = `Conflito de versão: o plano alimentar mudou (v${meta.entityVersionAtProposal} → v${currentDiet.currentVersion}) desde a geração desta sugestão.`;
-          await syncMessageToolExecution({
-            conversationId: execution.conversationId,
-            messageId: execution.messageId,
-            executionId: execution.id,
-            toolCallId: execution.toolCallId,
-            action: "conflict",
-            errorCode: "VERSION_CONFLICT",
-            errorMessage: conflictMsg,
+
+          await db.$transaction(async (tx) => {
+            await tx.aiToolExecution.update({
+              where: { id: execution.id },
+              data: {
+                status: "FAILED",
+                errorCode: "VERSION_CONFLICT",
+                errorMessage: conflictMsg,
+                completedAt: new Date(),
+              },
+            });
+
+            await syncMessageToolExecution(tx, {
+              conversationId: execution.conversationId,
+              messageId: execution.messageId,
+              executionId: execution.id,
+              toolCallId: execution.toolCallId,
+              action: "conflict",
+              errorCode: "VERSION_CONFLICT",
+              errorMessage: conflictMsg,
+            });
           });
+
           return NextResponse.json(
             {
               error: conflictMsg,
@@ -293,15 +341,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         if (currentRec && currentRec.currentVersion !== meta.entityVersionAtProposal) {
           const conflictMsg =
             "Conflito de versão: a recomendação clínica foi alterada por outra operação.";
-          await syncMessageToolExecution({
-            conversationId: execution.conversationId,
-            messageId: execution.messageId,
-            executionId: execution.id,
-            toolCallId: execution.toolCallId,
-            action: "conflict",
-            errorCode: "VERSION_CONFLICT",
-            errorMessage: conflictMsg,
+
+          await db.$transaction(async (tx) => {
+            await tx.aiToolExecution.update({
+              where: { id: execution.id },
+              data: {
+                status: "FAILED",
+                errorCode: "VERSION_CONFLICT",
+                errorMessage: conflictMsg,
+                completedAt: new Date(),
+              },
+            });
+
+            await syncMessageToolExecution(tx, {
+              conversationId: execution.conversationId,
+              messageId: execution.messageId,
+              executionId: execution.id,
+              toolCallId: execution.toolCallId,
+              action: "conflict",
+              errorCode: "VERSION_CONFLICT",
+              errorMessage: conflictMsg,
+            });
           });
+
           return NextResponse.json(
             {
               error: conflictMsg,
@@ -394,24 +456,27 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     // Mark as EXECUTED
-    await db.aiToolExecution.update({
-      where: { id: execution.id },
-      data: {
-        status: "EXECUTED",
-        approvedAt: new Date(),
-        approvedBy: user!.username,
-        completedAt: new Date(),
-        outputJson: outputResult,
-      },
-    });
+    // Mark as EXECUTED in atomic transaction with Message metadata update
+    await db.$transaction(async (tx) => {
+      await tx.aiToolExecution.update({
+        where: { id: execution.id },
+        data: {
+          status: "EXECUTED",
+          approvedAt: new Date(),
+          approvedBy: user!.username,
+          completedAt: new Date(),
+          outputJson: outputResult,
+        },
+      });
 
-    await syncMessageToolExecution({
-      conversationId: execution.conversationId,
-      messageId: execution.messageId,
-      executionId: execution.id,
-      toolCallId: execution.toolCallId,
-      action: "approve",
-      outputResult,
+      await syncMessageToolExecution(tx, {
+        conversationId: execution.conversationId,
+        messageId: execution.messageId,
+        executionId: execution.id,
+        toolCallId: execution.toolCallId,
+        action: "approve",
+        outputResult,
+      });
     });
 
     await logAudit({

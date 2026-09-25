@@ -32,9 +32,14 @@ const RECENCY_PATTERNS = [
   /\b(status\s+atual|panorama\s+atual)\b/i,
 ];
 
-// Clinical safety and dosing patterns
+// Clinical safety, interactions, and dosing patterns
 const CLINICAL_SAFETY_PATTERNS = [
-  /\b(dose|dosagem|posologia|titula[cç][aã]o|efeito\s+adverso|efeito\s+colateral|contraindica[cç][aã]o|interação|toxicidade|seguran[cç]a\s+cl[ií]nica)\b/i,
+  /\b(intera[cç][aã]o|intera[cç][oõ]es|interacao|interacoes|interage|interagir)\b/i,
+  /\b(contraindica[cç][aã]o|contraindica[cç][oõ]es|contraindicacao|contraindicacoes)\b/i,
+  /\b(efeitos?\s+adversos?|efeitos?\s+colaterais?|efeito\s+colateral|rea[cç][aã]o\s+adversa|rea[cç][oõ]es\s+adversas)\b/i,
+  /\b(seguran[cç]a|seguranca)\b/i,
+  /\b(toxicidade|t[oó]xico|toxica)\b/i,
+  /\b(dose|doses|dosagem|dosagens|posologia|titula[cç][aã]o|titulacao)\b/i,
 ];
 
 // Clinical entities dictionary and standard translations

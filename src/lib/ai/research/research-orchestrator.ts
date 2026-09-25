@@ -153,6 +153,7 @@ export class ResearchOrchestrator {
     // 2.5. Vault Entity Resolution for MIXED research intent
     let vaultResolution: VaultResolutionResult = {
       used: false,
+      status: "NONE",
       resolvedEntities: [],
       resolvedEntityTypes: [],
       resolvedEntityCount: 0,
@@ -169,6 +170,30 @@ export class ResearchOrchestrator {
         externalEntities: intentAnalysis.entities,
         dbClient: params.dbClient,
       });
+
+      if (vaultResolution.status === "NEEDS_DISAMBIGUATION") {
+        // Disambiguation required: do not perform external web search until user selects specific medication
+        const disambiguationXml = `\n<vault_disambiguation_required>\nO usuário possui ${vaultResolution.resolvedEntityCount} medicamentos ativos registrados no HealthVault: ${vaultResolution.ambiguousItems?.join(", ")}.\nA referência na pergunta é ambígua ("meu medicamento atual"). Não foi realizada pesquisa web externa específica até que o usuário indique sobre qual medicamento ativo deseja consultar. Solicite educadamente ao usuário a escolha de um dos medicamentos listados.\n</vault_disambiguation_required>\n`;
+
+        return {
+          runId,
+          query: params.userMessage,
+          queryHash,
+          policy,
+          intent: intentAnalysis.intent,
+          sources: [],
+          cached: false,
+          provider: "none",
+          latencyMs: Math.round(performance.now() - start),
+          status: "NEEDS_DISAMBIGUATION",
+          contextBlock: disambiguationXml,
+          vaultResolutionUsed: true,
+          resolvedEntityTypes: vaultResolution.resolvedEntityTypes,
+          resolvedEntityCount: vaultResolution.resolvedEntityCount,
+          hasAmbiguity: true,
+          ambiguousItems: vaultResolution.ambiguousItems,
+        };
+      }
 
       if (vaultResolution.used) {
         if (vaultResolution.suggestedQueries.length > 0) {

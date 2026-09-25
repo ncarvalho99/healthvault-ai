@@ -143,4 +143,54 @@ describe("MIXED Web-First Research — End-to-End Query Formulation Regression",
       ResearchOrchestrator.getProviderChain = origGetChain;
     }
   });
+
+  it("should return NEEDS_DISAMBIGUATION without slice and avoid external search when 4 active medications are present", async () => {
+    let externalSearchTriggered = false;
+    class MockSpySearchProvider implements WebResearchProvider {
+      name = "mock-spy-provider";
+      async search(): Promise<SearchResult[]> {
+        externalSearchTriggered = true;
+        return [];
+      }
+      async healthCheck() {
+        return { ok: true, provider: "mock-spy-provider" };
+      }
+    }
+
+    const mockDb = {
+      medication: {
+        findMany: async () => [
+          { id: "m1", name: "Ozempic", genericName: "semaglutida", isActive: true, versions: [{ doseValue: 0.5, doseUnit: "mg" }] },
+          { id: "m2", name: "Lipitor", genericName: "atorvastatina", isActive: true, versions: [{ doseValue: 20, doseUnit: "mg" }] },
+          { id: "m3", name: "Glifage", genericName: "metformina", isActive: true, versions: [{ doseValue: 500, doseUnit: "mg" }] },
+          { id: "m4", name: "Losartana", genericName: "losartana potassica", isActive: true, versions: [{ doseValue: 50, doseUnit: "mg" }] },
+        ],
+      },
+      dietPlan: { findFirst: async () => null },
+    };
+
+    const origGetChain = ResearchOrchestrator.getProviderChain;
+    ResearchOrchestrator.getProviderChain = () => [new MockSpySearchProvider()];
+
+    try {
+      const result = await ResearchOrchestrator.execute({
+        userId: "user-reg-4meds",
+        userMessage: "Meu medicamento atual possui alguma interação conhecida com metformina?",
+        modelId: "exploit",
+        dbClient: mockDb,
+      });
+
+      // Must return NEEDS_DISAMBIGUATION and not execute external searches
+      assert.strictEqual(result.status, "NEEDS_DISAMBIGUATION");
+      assert.strictEqual(result.hasAmbiguity, true);
+      assert.strictEqual(result.resolvedEntityCount, 4);
+      assert.strictEqual(result.ambiguousItems?.length, 4, "Must preserve all 4 active medications without slice omission");
+      assert.deepStrictEqual(result.ambiguousItems, ["Ozempic", "Lipitor", "Glifage", "Losartana"]);
+      assert.strictEqual(externalSearchTriggered, false, "Must not perform external search when disambiguation is needed");
+      assert.ok(result.contextBlock?.includes("<vault_disambiguation_required>"));
+      assert.ok(result.contextBlock?.includes("Ozempic, Lipitor, Glifage, Losartana"));
+    } finally {
+      ResearchOrchestrator.getProviderChain = origGetChain;
+    }
+  });
 });

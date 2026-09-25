@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 100 testes unitários (`node:test` + `tsx` em 34 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 102 testes unitários (`node:test` + `tsx` em 34 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -168,13 +168,14 @@ E2E_AI_MODEL="exploit"
     - **Classificação `MIXED` em Pesquisa Web**: Perguntas combinando contexto pessoal e validação externa (ex: *"Meu medicamento atual possui alguma interação conhecida com metformina?"*) são classificadas como `MIXED` com `requiresExternalResearch = true`.
     - **Defesa em Profundidade contra `SKIPPED` em `REQUIRED`**: Perguntas com termos clínicos externos (interações, bulas, guidelines, efeitos adversos) nunca sofrem fallback silencioso para a memória do modelo.
     - **Preservação de Operadores `site:` e Prioridade de Query Direcionada**: Sanitizador preserva operadores como `site:clinicaltrials.gov` e garante execução de ao menos uma query domain-targeted nas 3 requisições principais.
-11. **Vault Entity Resolution & Persistência de Estado de Aprovação**:
+11. **Vault Entity Resolution, Desambiguação & Persistência Transacional de Aprovação**:
     - **Vault Entity Resolution Server-Side para Intent `MIXED`**: Resolução prévia e minimalista de referências do prontuário (medicamentos ativos, doses, dietas) antes da formulação de buscas externas na web, gerando queries reais (`semaglutide metformin drug interaction`, `site:fda.gov semaglutide metformin`).
-    - **Detecção de Múltiplos Medicamentos Ativos**: Ocorrências de múltiplos medicamentos ativos formulam buscas para cada composto sem omissão silenciosa e sinalizam nota contextual de ambiguidade (`hasAmbiguity: true`).
+    - **Reconhecimento de Segurança Clínica (`CLINICAL_SAFETY_PATTERNS`)**: Detecção completa de variações ortográficas com e sem acento e plurais para `interações` / `interacoes`, `contraindicações` / `contraindicacoes`, `efeitos adversos`, `segurança` / `seguranca`, `toxicidade`, `dose`, `dosagem` e `titulação` / `titulacao`.
+    - **Tratamento de Múltiplos Medicamentos sem Slice Silencioso**: Referências ambíguas a múltiplos medicamentos ativos retornam estado explícito `NEEDS_DISAMBIGUATION` com lista completa de medicamentos ativos e suspendem pesquisas externas específicas até a escolha do usuário.
     - **Minimização Estrita de Privacidade**: Sanitizador elimina narrativas e PIIs, transmitindo apenas conceitos clínicos essenciais (`[entity] [condition] [guideline]`) e preservando sintaxe `site:`.
     - **Preservação de Consultas Locais**: Perguntas estritamente pessoais (`LOCAL_VAULT_ONLY`) continuam sem efetuar pesquisa externa desnecessária.
-    - **Sincronização Atômica de Approval State**: Endpoints de aprovação e rejeição atualizam bidirecionalmente a tabela `ai_tool_executions` e a mensagem associada (`Message.metadata.toolExecutions`), prevenindo que reloads de página (F5) reexibam cards pendentes já processados.
-    - **Tratamento de Conflito de Versão e Expiração**: Cards clínicos explícitos para `VERSION_CONFLICT` e `PROPOSAL_EXPIRED`, garantindo que propostas concorrentes ou vencidas não sejam gravadas como sucesso.
+    - **Sincronização Atômica via Transação Prisma (`db.$transaction`)**: Endpoints de aprovação e rejeição atualizam atomicamente `ai_tool_executions` e a mensagem associada (`Message.metadata.toolExecutions`), prevenindo inconsistências e garantindo rollback automático caso a atualização do metadata falhe.
+    - **Estado Terminal para Conflito de Versão e Expiração**: `VERSION_CONFLICT` e `PROPOSAL_EXPIRED` gravam `AiToolExecution` como `FAILED` com seu respectivo `errorCode` (não permanecendo em `PENDING_APPROVAL`) e metadata correspondente no chat.
 
 ---
 

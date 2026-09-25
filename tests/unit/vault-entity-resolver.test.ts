@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { VaultEntityResolver } from "../../src/lib/ai/research/vault-entity-resolver";
+import { ResearchIntentAnalyzer } from "../../src/lib/ai/research/research-intent";
 import { QuerySanitizer } from "../../src/lib/ai/research/query-sanitizer";
 
 describe("Vault Entity Resolver — Server-Side Minimal Resolution", () => {
@@ -29,6 +30,7 @@ describe("Vault Entity Resolver — Server-Side Minimal Resolution", () => {
     });
 
     assert.strictEqual(result.used, true);
+    assert.strictEqual(result.status, "RESOLVED");
     assert.strictEqual(result.resolvedEntityCount, 1);
     assert.deepStrictEqual(result.resolvedEntityTypes, ["medication"]);
     assert.strictEqual(result.hasAmbiguity, false);
@@ -53,7 +55,8 @@ describe("Vault Entity Resolver — Server-Side Minimal Resolution", () => {
     assert.strictEqual(hasPubmedQuery, true, "Should produce targeted query for site:pubmed.ncbi.nlm.nih.gov");
   });
 
-  it("should detect multiple active medications and formulate queries for all without silent omission", async () => {
+  it("should return state NEEDS_DISAMBIGUATION without slice omission when user has 4 active medications", async () => {
+    // 4 active medications in Vault
     const mockDb = {
       medication: {
         findMany: async () => [
@@ -71,13 +74,27 @@ describe("Vault Entity Resolver — Server-Side Minimal Resolution", () => {
             isActive: true,
             versions: [{ doseValue: 20, doseUnit: "mg", versionNumber: 1 }],
           },
+          {
+            id: "med-3",
+            name: "Glifage",
+            genericName: "metformina",
+            isActive: true,
+            versions: [{ doseValue: 500, doseUnit: "mg", versionNumber: 1 }],
+          },
+          {
+            id: "med-4",
+            name: "Losartana",
+            genericName: "losartana potassica",
+            isActive: true,
+            versions: [{ doseValue: 50, doseUnit: "mg", versionNumber: 1 }],
+          },
         ],
       },
       dietPlan: { findFirst: async () => null },
     };
 
     const result = await VaultEntityResolver.resolve({
-      userId: "user-test-2",
+      userId: "user-test-4meds",
       userMessage: "Meu medicamento atual possui alguma interação conhecida com metformina?",
       intent: "MIXED",
       externalEntities: ["metformin"],
@@ -85,16 +102,46 @@ describe("Vault Entity Resolver — Server-Side Minimal Resolution", () => {
     });
 
     assert.strictEqual(result.used, true);
+    assert.strictEqual(result.status, "NEEDS_DISAMBIGUATION");
     assert.strictEqual(result.hasAmbiguity, true);
-    assert.strictEqual(result.ambiguityType, "MULTIPLE_ACTIVE_MEDICATIONS");
-    assert.deepStrictEqual(result.ambiguousItems, ["Ozempic", "Lipitor"]);
-    assert.strictEqual(result.resolvedEntityCount, 2);
+    assert.strictEqual(result.ambiguityType, "NEEDS_DISAMBIGUATION");
+    assert.strictEqual(result.resolvedEntityCount, 4);
 
-    // Ensure BOTH medications are present in formulated queries
-    const hasSemaglutide = result.suggestedQueries.some((q) => q.includes("semaglutide"));
-    const hasAtorvastatin = result.suggestedQueries.some((q) => q.includes("atorvastatin"));
-    assert.strictEqual(hasSemaglutide, true, "Must include semaglutide in queries");
-    assert.strictEqual(hasAtorvastatin, true, "Must include atorvastatin in queries (no silent omission)");
+    // CRITICAL: Ensure ALL 4 medications are preserved in ambiguousItems with NO slice(0,3) omission!
+    assert.strictEqual(result.ambiguousItems?.length, 4);
+    assert.deepStrictEqual(result.ambiguousItems, ["Ozempic", "Lipitor", "Glifage", "Losartana"]);
+
+    // CRITICAL: Must not formulate specific searches until user chooses
+    assert.strictEqual(result.suggestedQueries.length, 0);
+    assert.strictEqual(result.domainTargetedQueries.length, 0);
+  });
+
+  it("should recognize clinical safety patterns for 'interacoes' without accent and 'interações' plural", () => {
+    // 1. "interacoes" sem acento
+    const resNoAccent = ResearchIntentAnalyzer.analyze("Quais são as interacoes conhecidas desse medicamento?");
+    assert.strictEqual(resNoAccent.isClinicalSafetyQuery, true, "'interacoes' sem acento must set isClinicalSafetyQuery=true");
+
+    // 2. "interações" plural com acento
+    const resPlural = ResearchIntentAnalyzer.analyze("Quais são as interações deste composto?");
+    assert.strictEqual(resPlural.isClinicalSafetyQuery, true, "'interações' plural must set isClinicalSafetyQuery=true");
+
+    // 3. contraindicação / contraindicações / contraindicacao / contraindicacoes
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Tem contraindicações?").isClinicalSafetyQuery, true);
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Tem contraindicacao?").isClinicalSafetyQuery, true);
+
+    // 4. efeito adverso / efeitos adversos
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Quais os efeitos adversos?").isClinicalSafetyQuery, true);
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Qual o efeito adverso?").isClinicalSafetyQuery, true);
+
+    // 5. segurança / seguranca
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Qual a seguranca do uso prolongado?").isClinicalSafetyQuery, true);
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Qual a segurança do uso?").isClinicalSafetyQuery, true);
+
+    // 6. toxicidade / dose / dosagem / titulação
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Qual o risco de toxicidade?").isClinicalSafetyQuery, true);
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Qual a dose recomendada?").isClinicalSafetyQuery, true);
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Como é a titulação da dose?").isClinicalSafetyQuery, true);
+    assert.strictEqual(ResearchIntentAnalyzer.analyze("Como funciona a titulacao?").isClinicalSafetyQuery, true);
   });
 
   it("should resolve diet reference when user mentions current diet in a mixed question", async () => {

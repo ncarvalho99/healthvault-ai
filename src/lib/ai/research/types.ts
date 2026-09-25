@@ -93,11 +93,12 @@ export interface ResolvedVaultEntity {
 
 export interface VaultResolutionResult {
   used: boolean;
+  status: "RESOLVED" | "NEEDS_DISAMBIGUATION" | "NONE";
   resolvedEntities: ResolvedVaultEntity[];
   resolvedEntityTypes: string[];
   resolvedEntityCount: number;
   hasAmbiguity: boolean;
-  ambiguityType?: "MULTIPLE_ACTIVE_MEDICATIONS";
+  ambiguityType?: "NEEDS_DISAMBIGUATION" | "MULTIPLE_ACTIVE_MEDICATIONS";
   ambiguousItems?: string[];
   suggestedQueries: string[];
   domainTargetedQueries: string[];
@@ -120,7 +121,7 @@ export interface ResearchExecutionResult {
   cached: boolean;
   provider: string;
   latencyMs: number;
-  status: "SUCCESS" | "SKIPPED" | "NO_PROVIDER" | "NO_SOURCES" | "FAILED";
+  status: "SUCCESS" | "SKIPPED" | "NO_PROVIDER" | "NO_SOURCES" | "FAILED" | "NEEDS_DISAMBIGUATION";
   reasonCode?: FailClosedReasonCode;
   rawResultCount?: number;
   normalizedResultCount?: number;

@@ -49,6 +49,7 @@ export class VaultEntityResolver {
     if (intent !== "MIXED" || !userId) {
       return {
         used: false,
+        status: "NONE",
         resolvedEntities: [],
         resolvedEntityTypes: [],
         resolvedEntityCount: 0,
@@ -60,9 +61,6 @@ export class VaultEntityResolver {
 
     const prisma = dbClient || db;
     const resolvedEntities: ResolvedVaultEntity[] = [];
-    let hasAmbiguity = false;
-    let ambiguityType: "MULTIPLE_ACTIVE_MEDICATIONS" | undefined;
-    let ambiguousItems: string[] | undefined;
 
     // 1. Resolve Active Medications if referenced in message
     if (MEDICATION_REF_PATTERN.test(userMessage)) {
@@ -75,7 +73,24 @@ export class VaultEntityResolver {
           orderBy: { updatedAt: "desc" },
         });
 
-        if (meds.length === 1) {
+        if (meds.length > 1) {
+          // Multiple active medications detected with ambiguous personal reference.
+          // Rule: Do NOT use slice(0,3) silently.
+          // Return state NEEDS_DISAMBIGUATION and do not formulate specific external search queries.
+          const allMedNames = meds.map((m: any) => m.name);
+          return {
+            used: true,
+            status: "NEEDS_DISAMBIGUATION",
+            resolvedEntities: [],
+            resolvedEntityTypes: ["medication"],
+            resolvedEntityCount: meds.length,
+            hasAmbiguity: true,
+            ambiguityType: "NEEDS_DISAMBIGUATION",
+            ambiguousItems: allMedNames,
+            suggestedQueries: [],
+            domainTargetedQueries: [],
+          };
+        } else if (meds.length === 1) {
           const m = meds[0];
           const rawName = (m.genericName || m.name).toLowerCase().trim();
           const canonicalName = BRAND_TO_GENERIC[rawName] || rawName;
@@ -86,24 +101,6 @@ export class VaultEntityResolver {
             dose: v ? `${v.doseValue} ${v.doseUnit}` : undefined,
             form: m.form || undefined,
           });
-        } else if (meds.length >= 2) {
-          // Multiple active medications detected.
-          // Option A: Formulate searches for all active medications (up to 3) without silent omission.
-          hasAmbiguity = true;
-          ambiguityType = "MULTIPLE_ACTIVE_MEDICATIONS";
-          ambiguousItems = meds.map((m: any) => m.name);
-
-          for (const m of meds.slice(0, 3)) {
-            const rawName = (m.genericName || m.name).toLowerCase().trim();
-            const canonicalName = BRAND_TO_GENERIC[rawName] || rawName;
-            const v = m.versions?.[0];
-            resolvedEntities.push({
-              type: "medication",
-              name: canonicalName,
-              dose: v ? `${v.doseValue} ${v.doseUnit}` : undefined,
-              form: m.form || undefined,
-            });
-          }
         }
       } catch (err) {
         console.error("VaultEntityResolver: Failed to fetch medications", err);
@@ -138,6 +135,7 @@ export class VaultEntityResolver {
     if (resolvedEntities.length === 0) {
       return {
         used: false,
+        status: "NONE",
         resolvedEntities: [],
         resolvedEntityTypes: [],
         resolvedEntityCount: 0,
@@ -212,12 +210,11 @@ export class VaultEntityResolver {
 
     return {
       used: true,
+      status: "RESOLVED",
       resolvedEntities,
       resolvedEntityTypes: Array.from(new Set(resolvedEntities.map((e) => e.type))),
       resolvedEntityCount: resolvedEntities.length,
-      hasAmbiguity,
-      ambiguityType,
-      ambiguousItems,
+      hasAmbiguity: false,
       suggestedQueries: sanitizedSuggested,
       domainTargetedQueries: sanitizedTargeted,
     };
