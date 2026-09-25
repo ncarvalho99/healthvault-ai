@@ -47,8 +47,8 @@ export class DietService {
     });
   }
 
-  static async create(userId: string, input: CreateDietInput) {
-    const diet = await db.$transaction(async (tx) => {
+  static async create(userId: string, input: CreateDietInput, txClient?: any) {
+    const runInTx = async (tx: any) => {
       const plan = await tx.dietPlan.create({
         data: {
           userId,
@@ -74,7 +74,9 @@ export class DietService {
       });
 
       return plan;
-    });
+    };
+
+    const diet = txClient ? await runInTx(txClient) : await db.$transaction(runInTx);
 
     await logAudit({
       userId,
@@ -86,7 +88,7 @@ export class DietService {
         calories: input.targetCalories,
         protein: input.targetProteinG,
       },
-    });
+    }, txClient);
 
     return diet;
   }
@@ -151,7 +153,7 @@ export class DietService {
         protein: input.targetProteinG,
         reason: input.changeReason,
       },
-    });
+    }, txClient);
 
     return result;
   }

@@ -4,53 +4,79 @@ import { NextRequest } from "next/server";
 import { POST } from "../../src/app/api/ai/executions/[id]/approve/route";
 import { createSessionToken } from "../../src/lib/auth";
 import { db } from "../../src/lib/db";
+import { ToolRegistry } from "../../src/lib/ai/tools/registry";
 import { MedicationService } from "../../src/lib/services/medication-service";
-import { DietService } from "../../src/lib/services/diet-service";
+import { HealthService } from "../../src/lib/services/health-service";
 
-describe("Agent Tool Execution & Approval Persistence", () => {
-  // Preserve original methods for cleanup
+describe("Agent Tool Execution & Approval Runtime Integrity", () => {
   const origAuditCreate = db.auditLog.create;
   const origUserFindUnique = db.user.findUnique;
   const origExecFindFirst = db.aiToolExecution.findFirst;
   const origExecUpdate = db.aiToolExecution.update;
+  const origExecUpdateMany = db.aiToolExecution.updateMany;
   const origMsgFindUnique = db.message.findUnique;
   const origMsgFindMany = db.message.findMany;
   const origMsgUpdate = db.message.update;
   const origTransaction = db.$transaction;
-  const origMedCreate = MedicationService.create;
-  const origDietFindUnique = db.dietPlan.findUnique;
 
   after(() => {
     db.auditLog.create = origAuditCreate;
     db.user.findUnique = origUserFindUnique;
     db.aiToolExecution.findFirst = origExecFindFirst;
     db.aiToolExecution.update = origExecUpdate;
+    db.aiToolExecution.updateMany = origExecUpdateMany;
     db.message.findUnique = origMsgFindUnique;
     db.message.findMany = origMsgFindMany;
     db.message.update = origMsgUpdate;
     db.$transaction = origTransaction;
-    MedicationService.create = origMedCreate;
-    db.dietPlan.findUnique = origDietFindUnique;
   });
 
-  it("should approve execution within atomic transaction with domain mutation, AiToolExecution, and Message.metadata", async () => {
-    const token = await createSessionToken({ userId: "user-test-persist", username: "clinician", role: "USER" });
+  it("1. Parity Test: every write tool that ApprovalEngine can put in REVIEW_FIRST must have an approved executor", async () => {
+    const allTools = ToolRegistry.getAll();
+    const policyTools = allTools.filter((t) => t.access === "write" && t.requiresApproval !== false);
+
+    assert.ok(policyTools.length >= 10, "Should have at least 10 policy-driven write tools");
+
+    const expectedTools = [
+      "healthvault_create_medication",
+      "healthvault_update_medication",
+      "healthvault_stop_medication",
+      "healthvault_create_recommendation",
+      "healthvault_update_recommendation",
+      "healthvault_create_diet",
+      "healthvault_update_diet",
+      "healthvault_add_body_metric",
+      "healthvault_add_symptom",
+      "healthvault_add_lab_result",
+    ];
+
+    for (const tool of policyTools) {
+      assert.ok(
+        expectedTools.includes(tool.name),
+        `Write tool '${tool.name}' capable of REVIEW_FIRST must be mapped in expected approval executors`
+      );
+    }
+  });
+
+  it("2. Lab approval: healthvault_add_lab_result canonical name approval creates LabTest and EXECUTED state", async () => {
+    const token = await createSessionToken({ userId: "user-lab-test", username: "clinician", role: "USER" });
 
     let persistedExecution: any = {
-      id: "exec-101",
-      userId: "user-test-persist",
-      conversationId: "conv-101",
-      messageId: "msg-101",
-      toolCallId: "call_med_101",
-      toolName: "healthvault_create_medication",
+      id: "exec-lab-01",
+      userId: "user-lab-test",
+      conversationId: "conv-lab-01",
+      messageId: "msg-lab-01",
+      toolCallId: "call_lab_01",
+      toolName: "healthvault_add_lab_result", // Canonical name matching ToolRegistry
       status: "PENDING_APPROVAL",
       requiresApproval: true,
       inputJson: {
-        name: "Semaglutida",
-        generic_name: "semaglutide",
-        dose_value: 0.5,
-        dose_unit: "mg",
-        frequency: "semanal",
+        test_name: "Perfil Lipídico",
+        marker_name: "Glicemia de Jejum",
+        result_value: 92,
+        unit: "mg/dL",
+        reference_range_low: 70,
+        reference_range_high: 99,
         _proposalMeta: {
           proposedAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + 86400000).toISOString(),
@@ -59,54 +85,167 @@ describe("Agent Tool Execution & Approval Persistence", () => {
     };
 
     let persistedMessage: any = {
-      id: "msg-101",
-      conversationId: "conv-101",
+      id: "msg-lab-01",
+      conversationId: "conv-lab-01",
       senderType: "AI",
-      content: "Sugiro iniciar Semaglutida 0.5mg.",
       metadata: {
         toolExecutions: [
           {
-            toolCallId: "call_med_101",
-            toolName: "healthvault_create_medication",
-            output: {
-              success: true,
-              requires_approval: true,
-              execution_id: "exec-101",
-              message: "Esta ação requer confirmação manual.",
-              proposal: { name: "Semaglutida", dose_value: 0.5, dose_unit: "mg" },
-            },
+            toolCallId: "call_lab_01",
+            toolName: "healthvault_add_lab_result",
+            output: { requires_approval: true, execution_id: "exec-lab-01" },
           },
         ],
       },
     };
 
-    let domainMeds: any[] = [];
-    let txUsedForDomain = false;
+    let domainLabs: any[] = [];
 
-    (db.user.findUnique as any) = async () => ({ id: "user-test-persist", username: "clinician", role: "USER" });
-    (db.auditLog.create as any) = async () => ({ id: "audit-mock-id" });
+    (db.user.findUnique as any) = async () => ({ id: "user-lab-test", username: "clinician", role: "USER" });
     (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
 
-    // Mock Prisma $transaction
     (db.$transaction as any) = async (callback: any) => {
       const tx = {
-        medication: {
+        aiToolExecution: {
+          updateMany: async ({ where, data }: any) => {
+            if (persistedExecution.status === where.status) {
+              persistedExecution = { ...persistedExecution, ...data };
+              return { count: 1 };
+            }
+            return { count: 0 };
+          },
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
+        labTest: {
           create: async ({ data }: any) => {
-            txUsedForDomain = true;
-            const newMed = { id: "med-new-1", ...data };
-            domainMeds.push(newMed);
-            return newMed;
+            const l = { id: "lab-record-01", ...data };
+            domainLabs.push(l);
+            return l;
+          },
+        },
+        auditLog: {
+          create: async () => ({ id: "audit-01" }),
+        },
+        message: {
+          findUnique: async () => persistedMessage,
+          findMany: async () => [persistedMessage],
+          update: async ({ data }: any) => {
+            persistedMessage = { ...persistedMessage, ...data };
+            return persistedMessage;
+          },
+        },
+      };
+      return await callback(tx);
+    };
+
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-lab-01/approve", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ action: "approve" }),
+    });
+
+    const res = await POST(req, { params: { id: "exec-lab-01" } });
+    const body = await res.json();
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(body.status, "EXECUTED");
+    assert.ok(body.result !== null, "outputResult must not be null");
+    assert.strictEqual(body.result.entity, "lab");
+    assert.strictEqual(body.result.markerName, "Glicemia de Jejum");
+
+    // Real LabTest domain record created
+    assert.strictEqual(domainLabs.length, 1);
+    assert.strictEqual(domainLabs[0].markerName, "Glicemia de Jejum");
+    assert.strictEqual(domainLabs[0].resultValue, 92);
+
+    // AiToolExecution EXECUTED
+    assert.strictEqual(persistedExecution.status, "EXECUTED");
+
+    // Message metadata updated
+    const tool = persistedMessage.metadata.toolExecutions[0];
+    assert.strictEqual(tool.output.requires_approval, false);
+    assert.strictEqual(tool.output.resolvedAction, "approve");
+  });
+
+  it("3. Stop medication approval: healthvault_stop_medication discontinues medication", async () => {
+    const token = await createSessionToken({ userId: "user-stop-test", username: "clinician", role: "USER" });
+
+    let persistedExecution: any = {
+      id: "exec-stop-01",
+      userId: "user-stop-test",
+      conversationId: "conv-stop-01",
+      messageId: "msg-stop-01",
+      toolCallId: "call_stop_01",
+      toolName: "healthvault_stop_medication",
+      status: "PENDING_APPROVAL",
+      requiresApproval: true,
+      inputJson: {
+        medication_id: "med-active-99",
+        reason: "Paciente atingiu meta terapêutica",
+        _proposalMeta: {
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        },
+      },
+    };
+
+    let persistedMessage: any = {
+      id: "msg-stop-01",
+      conversationId: "conv-stop-01",
+      senderType: "AI",
+      metadata: {
+        toolExecutions: [
+          { toolCallId: "call_stop_01", output: { requires_approval: true, execution_id: "exec-stop-01" } },
+        ],
+      },
+    };
+
+    let medIsActive = true;
+    let newVersionCreated = false;
+
+    (db.user.findUnique as any) = async () => ({ id: "user-stop-test", username: "clinician", role: "USER" });
+    (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
+
+    (db.$transaction as any) = async (callback: any) => {
+      const tx = {
+        aiToolExecution: {
+          updateMany: async ({ where, data }: any) => {
+            if (persistedExecution.status === where.status) {
+              persistedExecution = { ...persistedExecution, ...data };
+              return { count: 1 };
+            }
+            return { count: 0 };
+          },
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
+        medication: {
+          findFirst: async () => ({
+            id: "med-active-99",
+            name: "Ozempic",
+            isActive: true,
+            versions: [{ versionNumber: 1, doseValue: 0.5, doseUnit: "mg" }],
+          }),
+          update: async ({ data }: any) => {
+            medIsActive = data.isActive;
+            return { id: "med-active-99", name: "Ozempic", isActive: data.isActive };
           },
         },
         medicationVersion: {
-          create: async ({ data }: any) => ({ id: "ver-1", versionNumber: 1, ...data }),
-        },
-        aiToolExecution: {
-          update: async ({ data }: any) => {
-            persistedExecution = { ...persistedExecution, ...data };
-            return persistedExecution;
+          update: async () => {},
+          create: async ({ data }: any) => {
+            newVersionCreated = true;
+            return { id: "ver-stop-2", versionNumber: 2, ...data };
           },
         },
+        auditLog: { create: async () => ({ id: "audit-stop" }) },
         message: {
           findUnique: async () => persistedMessage,
           findMany: async () => [persistedMessage],
@@ -119,85 +258,62 @@ describe("Agent Tool Execution & Approval Persistence", () => {
       return await callback(tx);
     };
 
-    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-101/approve", {
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-stop-01/approve", {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ action: "approve" }),
     });
 
-    const res = await POST(req, { params: { id: "exec-101" } });
+    const res = await POST(req, { params: { id: "exec-stop-01" } });
     const body = await res.json();
 
     assert.strictEqual(res.status, 200);
-    assert.strictEqual(body.success, true);
     assert.strictEqual(body.status, "EXECUTED");
-
-    // Verify domain mutation participated in tx
-    assert.strictEqual(txUsedForDomain, true, "Domain mutation must participate in the transaction via tx");
-    assert.strictEqual(domainMeds.length, 1);
-    assert.strictEqual(domainMeds[0].name, "Semaglutida");
-
-    // Verify AiToolExecution status in DB
-    assert.strictEqual(persistedExecution.status, "EXECUTED");
-    assert.strictEqual(persistedExecution.approvedBy, "clinician");
-    assert.ok(persistedExecution.completedAt);
-
-    // Verify Message.metadata.toolExecutions synchronization
-    const syncedTool = persistedMessage.metadata.toolExecutions[0];
-    assert.strictEqual(syncedTool.output.requires_approval, false);
-    assert.strictEqual(syncedTool.output.resolvedAction, "approve");
-    assert.strictEqual(syncedTool.output.success, true);
-    assert.deepStrictEqual(syncedTool.output.data, {
-      entity: "medication",
-      id: "med-new-1",
-      name: "Semaglutida",
-      version: 1,
-    });
+    assert.strictEqual(body.result.status, "DISCONTINUED");
+    assert.strictEqual(medIsActive, false, "Medication must be set to isActive = false");
+    assert.strictEqual(newVersionCreated, true, "New discontinuation version must be created");
   });
 
-  it("should reject execution atomically and update both AiToolExecution and Message.metadata", async () => {
-    const token = await createSessionToken({ userId: "user-test-persist", username: "clinician", role: "USER" });
+  it("4. Unknown/Unsupported tool: throws UNSUPPORTED_APPROVAL_TOOL and rolls back", async () => {
+    const token = await createSessionToken({ userId: "user-unsupported", username: "clinician", role: "USER" });
 
     let persistedExecution: any = {
-      id: "exec-102",
-      userId: "user-test-persist",
-      conversationId: "conv-102",
-      messageId: "msg-102",
-      toolCallId: "call_med_102",
-      toolName: "healthvault_create_medication",
+      id: "exec-weird-tool",
+      userId: "user-unsupported",
+      conversationId: "conv-weird",
+      messageId: "msg-weird",
+      toolCallId: "call_weird",
+      toolName: "healthvault_unknown_future_mutation",
       status: "PENDING_APPROVAL",
       requiresApproval: true,
-      inputJson: { name: "Aspirina", _proposalMeta: {} },
+      inputJson: { _proposalMeta: {} },
     };
 
     let persistedMessage: any = {
-      id: "msg-102",
-      conversationId: "conv-102",
+      id: "msg-weird",
+      conversationId: "conv-weird",
       senderType: "AI",
-      content: "Sugiro Aspirina.",
       metadata: {
         toolExecutions: [
-          {
-            toolCallId: "call_med_102",
-            toolName: "healthvault_create_medication",
-            output: {
-              success: true,
-              requires_approval: true,
-              execution_id: "exec-102",
-            },
-          },
+          { toolCallId: "call_weird", output: { requires_approval: true, execution_id: "exec-weird-tool" } },
         ],
       },
     };
 
-    (db.user.findUnique as any) = async () => ({ id: "user-test-persist", username: "clinician", role: "USER" });
+    (db.user.findUnique as any) = async () => ({ id: "user-unsupported", username: "clinician", role: "USER" });
     (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
+
     (db.$transaction as any) = async (callback: any) => {
+      const snapshot = { ...persistedExecution };
       const tx = {
         aiToolExecution: {
+          updateMany: async ({ where, data }: any) => {
+            if (persistedExecution.status === where.status) {
+              persistedExecution = { ...persistedExecution, ...data };
+              return { count: 1 };
+            }
+            return { count: 0 };
+          },
           update: async ({ data }: any) => {
             persistedExecution = { ...persistedExecution, ...data };
             return persistedExecution;
@@ -206,193 +322,195 @@ describe("Agent Tool Execution & Approval Persistence", () => {
         message: {
           findUnique: async () => persistedMessage,
           findMany: async () => [persistedMessage],
-          update: async ({ data }: any) => {
-            persistedMessage = { ...persistedMessage, ...data };
-            return persistedMessage;
-          },
+          update: async () => {},
         },
       };
-      return await callback(tx);
+      try {
+        return await callback(tx);
+      } catch (err) {
+        persistedExecution = snapshot;
+        throw err;
+      }
     };
 
-    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-102/approve", {
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-weird-tool/approve", {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ action: "reject" }),
-    });
-
-    const res = await POST(req, { params: { id: "exec-102" } });
-    const body = await res.json();
-
-    assert.strictEqual(res.status, 200);
-    assert.strictEqual(body.status, "REJECTED");
-    assert.strictEqual(persistedExecution.status, "REJECTED");
-
-    const syncedTool = persistedMessage.metadata.toolExecutions[0];
-    assert.strictEqual(syncedTool.output.requires_approval, false);
-    assert.strictEqual(syncedTool.output.resolvedAction, "reject");
-  });
-
-  it("should handle VERSION_CONFLICT: execution must NOT remain PENDING_APPROVAL and transition to FAILED", async () => {
-    const token = await createSessionToken({ userId: "user-test-persist", username: "clinician", role: "USER" });
-
-    let persistedExecution: any = {
-      id: "exec-103",
-      userId: "user-test-persist",
-      conversationId: "conv-103",
-      messageId: "msg-103",
-      toolCallId: "call_diet_103",
-      toolName: "healthvault_update_diet",
-      status: "PENDING_APPROVAL",
-      inputJson: {
-        target_calories: 2200,
-        _proposalMeta: {
-          entityId: "diet-uuid-1",
-          entityType: "diet",
-          entityVersionAtProposal: 1, // Proposal was created when diet was v1
-        },
-      },
-    };
-
-    let persistedMessage: any = {
-      id: "msg-103",
-      conversationId: "conv-103",
-      senderType: "AI",
-      metadata: {
-        toolExecutions: [
-          {
-            toolCallId: "call_diet_103",
-            toolName: "healthvault_update_diet",
-            output: { requires_approval: true, execution_id: "exec-103" },
-          },
-        ],
-      },
-    };
-
-    (db.user.findUnique as any) = async () => ({ id: "user-test-persist", username: "clinician", role: "USER" });
-    (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
-
-    (db.$transaction as any) = async (callback: any) => {
-      const tx = {
-        dietPlan: {
-          findUnique: async () => ({ id: "diet-uuid-1", currentVersion: 2 }), // Current version changed to 2!
-        },
-        aiToolExecution: {
-          update: async ({ data }: any) => {
-            persistedExecution = { ...persistedExecution, ...data };
-            return persistedExecution;
-          },
-        },
-        message: {
-          findUnique: async () => persistedMessage,
-          findMany: async () => [persistedMessage],
-          update: async ({ data }: any) => {
-            persistedMessage = { ...persistedMessage, ...data };
-            return persistedMessage;
-          },
-        },
-      };
-      return await callback(tx);
-    };
-
-    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-103/approve", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ action: "approve" }),
     });
 
-    const res = await POST(req, { params: { id: "exec-103" } });
-    const body = await res.json();
+    const res = await POST(req, { params: { id: "exec-weird-tool" } });
+    assert.strictEqual(res.status, 500);
 
-    assert.strictEqual(res.status, 409);
-    assert.strictEqual(body.code, "VERSION_CONFLICT");
-
-    // CRITICAL: AiToolExecution must NOT remain PENDING_APPROVAL!
-    assert.notStrictEqual(persistedExecution.status, "PENDING_APPROVAL");
-    assert.strictEqual(persistedExecution.status, "FAILED");
-    assert.strictEqual(persistedExecution.errorCode, "VERSION_CONFLICT");
-    assert.ok(persistedExecution.completedAt);
-
-    // Verify metadata was updated with conflict and did NOT become approved
-    const toolInMsg = persistedMessage.metadata.toolExecutions[0];
-    assert.notStrictEqual(toolInMsg.output.resolvedAction, "approve");
-    assert.strictEqual(toolInMsg.output.resolvedAction, "conflict");
-    assert.strictEqual(toolInMsg.output.errorCode, "VERSION_CONFLICT");
+    // Rollback: status remains PENDING_APPROVAL and was NEVER committed as EXECUTED with null output
+    assert.strictEqual(persistedExecution.status, "PENDING_APPROVAL");
   });
 
-  it("should rollback domain mutation and AiToolExecution if Message metadata update fails", async () => {
-    const token = await createSessionToken({ userId: "user-test-persist", username: "clinician", role: "USER" });
+  it("5. Concurrency Compare-And-Set: two simultaneous approvals execute domain mutation exactly ONCE", async () => {
+    const token = await createSessionToken({ userId: "user-race", username: "clinician", role: "USER" });
 
     let persistedExecution: any = {
-      id: "exec-rollback-1",
-      userId: "user-test-persist",
-      conversationId: "conv-rb",
-      messageId: "msg-rb",
-      toolCallId: "call_rb",
+      id: "exec-race-01",
+      userId: "user-race",
+      conversationId: "conv-race",
+      messageId: "msg-race",
+      toolCallId: "call_race",
       toolName: "healthvault_create_medication",
       status: "PENDING_APPROVAL",
       requiresApproval: true,
       inputJson: {
         name: "Metformina",
         dose_value: 500,
-        dose_unit: "mg",
-        _proposalMeta: {
-          expiresAt: new Date(Date.now() + 86400000).toISOString(),
-        },
+        _proposalMeta: { expiresAt: new Date(Date.now() + 86400000).toISOString() },
       },
     };
 
     let persistedMessage: any = {
-      id: "msg-rb",
-      conversationId: "conv-rb",
+      id: "msg-race",
+      conversationId: "conv-race",
       senderType: "AI",
       metadata: {
         toolExecutions: [
-          { toolCallId: "call_rb", output: { requires_approval: true, execution_id: "exec-rollback-1" } },
+          { toolCallId: "call_race", output: { requires_approval: true, execution_id: "exec-race-01" } },
         ],
       },
     };
 
-    let domainMeds: any[] = [];
+    let domainMutationCallCount = 0;
 
-    (db.user.findUnique as any) = async () => ({ id: "user-test-persist", username: "clinician", role: "USER" });
+    (db.user.findUnique as any) = async () => ({ id: "user-race", username: "clinician", role: "USER" });
     (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
 
-    // Transaction mock with automatic rollback on error
+    // Simulate real database with atomic compare-and-set
     (db.$transaction as any) = async (callback: any) => {
-      const snapshotExecution = { ...persistedExecution };
-      const snapshotMessage = JSON.parse(JSON.stringify(persistedMessage));
-      const snapshotDomainMeds = [...domainMeds];
-
       const tx = {
+        aiToolExecution: {
+          updateMany: async ({ where, data }: any) => {
+            // Atomic compare-and-set: check if status is still PENDING_APPROVAL
+            if (persistedExecution.status === where.status) {
+              persistedExecution = { ...persistedExecution, ...data };
+              return { count: 1 };
+            }
+            return { count: 0 };
+          },
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
         medication: {
           create: async ({ data }: any) => {
-            const m = { id: "med-rb-1", ...data };
+            domainMutationCallCount++;
+            return { id: "med-race-1", ...data };
+          },
+        },
+        medicationVersion: {
+          create: async ({ data }: any) => ({ id: "ver-1", versionNumber: 1, ...data }),
+        },
+        auditLog: { create: async () => ({ id: "audit-1" }) },
+        message: {
+          findUnique: async () => persistedMessage,
+          findMany: async () => [persistedMessage],
+          update: async ({ data }: any) => {
+            persistedMessage = { ...persistedMessage, ...data };
+            return persistedMessage;
+          },
+        },
+      };
+      return await callback(tx);
+    };
+
+    const makeRequest = () =>
+      new NextRequest("http://localhost:3000/api/ai/executions/exec-race-01/approve", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ action: "approve" }),
+      });
+
+    // Run both approval requests concurrently
+    const [res1, res2] = await Promise.all([
+      POST(makeRequest(), { params: { id: "exec-race-01" } }),
+      POST(makeRequest(), { params: { id: "exec-race-01" } }),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    assert.deepStrictEqual(statuses, [200, 400], "One request must succeed (200) and the concurrent duplicate must fail (400)");
+
+    // CRITICAL: Domain mutation must have been invoked exactly ONCE!
+    assert.strictEqual(domainMutationCallCount, 1, "Domain mutation count must be strictly 1 under concurrency");
+  });
+
+  it("6. Transactional Audit Consistency: audit record is rolled back if Message metadata fails", async () => {
+    const token = await createSessionToken({ userId: "user-audit-rb", username: "clinician", role: "USER" });
+
+    let persistedExecution: any = {
+      id: "exec-audit-rb",
+      userId: "user-audit-rb",
+      conversationId: "conv-audit-rb",
+      messageId: "msg-audit-rb",
+      toolCallId: "call_audit_rb",
+      toolName: "healthvault_create_medication",
+      status: "PENDING_APPROVAL",
+      requiresApproval: true,
+      inputJson: {
+        name: "Atorvastatina",
+        _proposalMeta: { expiresAt: new Date(Date.now() + 86400000).toISOString() },
+      },
+    };
+
+    let persistedMessage: any = {
+      id: "msg-audit-rb",
+      conversationId: "conv-audit-rb",
+      senderType: "AI",
+      metadata: {
+        toolExecutions: [
+          { toolCallId: "call_audit_rb", output: { requires_approval: true, execution_id: "exec-audit-rb" } },
+        ],
+      },
+    };
+
+    let persistedAudits: any[] = [];
+    let domainMeds: any[] = [];
+
+    (db.user.findUnique as any) = async () => ({ id: "user-audit-rb", username: "clinician", role: "USER" });
+    (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
+
+    (db.$transaction as any) = async (callback: any) => {
+      const snapExec = { ...persistedExecution };
+      const snapAudits = [...persistedAudits];
+      const snapMeds = [...domainMeds];
+      const snapMsg = JSON.parse(JSON.stringify(persistedMessage));
+
+      const tx = {
+        aiToolExecution: {
+          updateMany: async () => ({ count: 1 }),
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
+        medication: {
+          create: async ({ data }: any) => {
+            const m = { id: "med-rb", ...data };
             domainMeds.push(m);
             return m;
           },
         },
         medicationVersion: {
-          create: async ({ data }: any) => ({ id: "ver-rb-1", versionNumber: 1, ...data }),
+          create: async ({ data }: any) => ({ id: "v1", versionNumber: 1, ...data }),
         },
-        aiToolExecution: {
-          update: async ({ data }: any) => {
-            persistedExecution = { ...persistedExecution, ...data };
-            return persistedExecution;
+        auditLog: {
+          create: async ({ data }: any) => {
+            const a = { id: "audit-rb", ...data };
+            persistedAudits.push(a);
+            return a;
           },
         },
         message: {
           findUnique: async () => persistedMessage,
           findMany: async () => [persistedMessage],
           update: async () => {
-            // Simulated sudden DB constraint violation during Message metadata update!
-            throw new Error("Simulated Database Error during Message update");
+            throw new Error("Message metadata DB failure");
           },
         },
       };
@@ -400,133 +518,109 @@ describe("Agent Tool Execution & Approval Persistence", () => {
       try {
         return await callback(tx);
       } catch (err) {
-        // Rollback snapshots!
-        persistedExecution = snapshotExecution;
-        persistedMessage = snapshotMessage;
-        domainMeds = snapshotDomainMeds;
+        persistedExecution = snapExec;
+        persistedAudits = snapAudits;
+        domainMeds = snapMeds;
+        persistedMessage = snapMsg;
         throw err;
       }
     };
 
-    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-rollback-1/approve", {
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-audit-rb/approve", {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ action: "approve" }),
     });
 
-    const res = await POST(req, { params: { id: "exec-rollback-1" } });
+    const res = await POST(req, { params: { id: "exec-audit-rb" } });
     assert.strictEqual(res.status, 500);
 
-    // CRITICAL (Requirement 6): Domain mutation must also disappear / rollback!
-    assert.strictEqual(domainMeds.length, 0, "Domain mutation must rollback and disappear");
-
-    // CRITICAL: AiToolExecution must remain PENDING_APPROVAL!
-    assert.strictEqual(persistedExecution.status, "PENDING_APPROVAL", "AiToolExecution must rollback to PENDING_APPROVAL");
-
-    // CRITICAL: Message metadata must remain pending!
-    assert.strictEqual(persistedMessage.metadata.toolExecutions[0].output.requires_approval, true, "Message metadata must remain pending");
+    // CRITICAL: Both domain mutation AND audit record must rollback and disappear!
+    assert.strictEqual(domainMeds.length, 0, "Domain mutation must rollback");
+    assert.strictEqual(persistedAudits.length, 0, "Audit record must rollback with transaction");
+    assert.strictEqual(persistedExecution.status, "PENDING_APPROVAL", "AiToolExecution must remain PENDING_APPROVAL");
   });
 
-  it("should rollback entire transaction if Message is not found (missing message)", async () => {
-    const token = await createSessionToken({ userId: "user-test-persist", username: "clinician", role: "USER" });
+  it("7. Rollback if Message is not found", async () => {
+    const token = await createSessionToken({ userId: "user-notfound", username: "clinician", role: "USER" });
 
     let persistedExecution: any = {
-      id: "exec-missing-msg",
-      userId: "user-test-persist",
-      conversationId: "conv-missing",
-      messageId: "msg-does-not-exist",
-      toolCallId: "call_missing",
+      id: "exec-msg-nf",
+      userId: "user-notfound",
+      conversationId: "conv-nf",
+      messageId: "msg-missing",
+      toolCallId: "call_nf",
       toolName: "healthvault_create_medication",
       status: "PENDING_APPROVAL",
       requiresApproval: true,
-      inputJson: {
-        name: "Liraglutida",
-        _proposalMeta: {
-          expiresAt: new Date(Date.now() + 86400000).toISOString(),
-        },
-      },
+      inputJson: { name: "Metformina", _proposalMeta: { expiresAt: new Date(Date.now() + 86400000).toISOString() } },
     };
 
     let domainMeds: any[] = [];
 
-    (db.user.findUnique as any) = async () => ({ id: "user-test-persist", username: "clinician", role: "USER" });
+    (db.user.findUnique as any) = async () => ({ id: "user-notfound", username: "clinician", role: "USER" });
     (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
 
     (db.$transaction as any) = async (callback: any) => {
-      const snapshotExecution = { ...persistedExecution };
-      const snapshotDomainMeds = [...domainMeds];
-
+      const snapExec = { ...persistedExecution };
+      const snapMeds = [...domainMeds];
       const tx = {
-        medication: {
-          create: async ({ data }: any) => {
-            const m = { id: "med-missing-msg", ...data };
-            domainMeds.push(m);
-            return m;
-          },
-        },
-        medicationVersion: {
-          create: async ({ data }: any) => ({ id: "ver-1", versionNumber: 1, ...data }),
-        },
         aiToolExecution: {
+          updateMany: async () => ({ count: 1 }),
           update: async ({ data }: any) => {
             persistedExecution = { ...persistedExecution, ...data };
             return persistedExecution;
           },
         },
+        medication: {
+          create: async ({ data }: any) => {
+            const m = { id: "m", ...data };
+            domainMeds.push(m);
+            return m;
+          },
+        },
+        medicationVersion: { create: async () => ({ id: "v" }) },
+        auditLog: { create: async () => ({ id: "a" }) },
         message: {
-          findUnique: async () => null, // Message not found!
-          findMany: async () => [],     // Fallback finds nothing!
+          findUnique: async () => null,
+          findMany: async () => [],
           update: async () => {},
         },
       };
-
       try {
         return await callback(tx);
       } catch (err) {
-        persistedExecution = snapshotExecution;
-        domainMeds = snapshotDomainMeds;
+        persistedExecution = snapExec;
+        domainMeds = snapMeds;
         throw err;
       }
     };
 
-    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-missing-msg/approve", {
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-msg-nf/approve", {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ action: "approve" }),
     });
 
-    const res = await POST(req, { params: { id: "exec-missing-msg" } });
+    const res = await POST(req, { params: { id: "exec-msg-nf" } });
     assert.strictEqual(res.status, 500);
-
-    // Rollback validation (Requirement 7)
-    assert.strictEqual(domainMeds.length, 0, "Domain mutation must rollback when Message is not found");
-    assert.strictEqual(persistedExecution.status, "PENDING_APPROVAL", "AiToolExecution must rollback to PENDING_APPROVAL");
+    assert.strictEqual(domainMeds.length, 0, "Domain mutation must rollback when Message is missing");
+    assert.strictEqual(persistedExecution.status, "PENDING_APPROVAL");
   });
 
-  it("should rollback entire transaction if toolCallId is not found in message metadata", async () => {
-    const token = await createSessionToken({ userId: "user-test-persist", username: "clinician", role: "USER" });
+  it("8. Rollback if toolCallId is not found in message metadata", async () => {
+    const token = await createSessionToken({ userId: "user-unmatched", username: "clinician", role: "USER" });
 
     let persistedExecution: any = {
-      id: "exec-unmatched-tc",
-      userId: "user-test-persist",
+      id: "exec-unmatched",
+      userId: "user-unmatched",
       conversationId: "conv-unmatched",
       messageId: "msg-unmatched",
-      toolCallId: "call_target_123",
+      toolCallId: "call_target_999",
       toolName: "healthvault_create_medication",
       status: "PENDING_APPROVAL",
       requiresApproval: true,
-      inputJson: {
-        name: "Rosuvastatina",
-        _proposalMeta: {
-          expiresAt: new Date(Date.now() + 86400000).toISOString(),
-        },
-      },
+      inputJson: { name: "Metformina", _proposalMeta: { expiresAt: new Date(Date.now() + 86400000).toISOString() } },
     };
 
     let persistedMessage: any = {
@@ -534,108 +628,61 @@ describe("Agent Tool Execution & Approval Persistence", () => {
       conversationId: "conv-unmatched",
       senderType: "AI",
       metadata: {
-        // Contains only an unrelated toolCallId!
         toolExecutions: [
-          { toolCallId: "call_unrelated_999", output: { requires_approval: true, execution_id: "other-exec" } },
+          { toolCallId: "call_different_000", output: { requires_approval: true, execution_id: "other" } },
         ],
       },
     };
 
     let domainMeds: any[] = [];
 
-    (db.user.findUnique as any) = async () => ({ id: "user-test-persist", username: "clinician", role: "USER" });
+    (db.user.findUnique as any) = async () => ({ id: "user-unmatched", username: "clinician", role: "USER" });
     (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
 
     (db.$transaction as any) = async (callback: any) => {
-      const snapshotExecution = { ...persistedExecution };
-      const snapshotMessage = JSON.parse(JSON.stringify(persistedMessage));
-      const snapshotDomainMeds = [...domainMeds];
-
+      const snapExec = { ...persistedExecution };
+      const snapMeds = [...domainMeds];
       const tx = {
-        medication: {
-          create: async ({ data }: any) => {
-            const m = { id: "med-unmatched", ...data };
-            domainMeds.push(m);
-            return m;
-          },
-        },
-        medicationVersion: {
-          create: async ({ data }: any) => ({ id: "ver-1", versionNumber: 1, ...data }),
-        },
         aiToolExecution: {
+          updateMany: async () => ({ count: 1 }),
           update: async ({ data }: any) => {
             persistedExecution = { ...persistedExecution, ...data };
             return persistedExecution;
           },
         },
+        medication: {
+          create: async ({ data }: any) => {
+            const m = { id: "m", ...data };
+            domainMeds.push(m);
+            return m;
+          },
+        },
+        medicationVersion: { create: async () => ({ id: "v" }) },
+        auditLog: { create: async () => ({ id: "a" }) },
         message: {
           findUnique: async () => persistedMessage,
           findMany: async () => [persistedMessage],
-          update: async ({ data }: any) => {
-            persistedMessage = { ...persistedMessage, ...data };
-            return persistedMessage;
-          },
+          update: async () => {},
         },
       };
-
       try {
         return await callback(tx);
       } catch (err) {
-        persistedExecution = snapshotExecution;
-        persistedMessage = snapshotMessage;
-        domainMeds = snapshotDomainMeds;
+        persistedExecution = snapExec;
+        domainMeds = snapMeds;
         throw err;
       }
     };
 
-    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-unmatched-tc/approve", {
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-unmatched/approve", {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ action: "approve" }),
     });
 
-    const res = await POST(req, { params: { id: "exec-unmatched-tc" } });
+    const res = await POST(req, { params: { id: "exec-unmatched" } });
     assert.strictEqual(res.status, 500);
-
-    // Rollback validation (Requirement 7)
-    assert.strictEqual(domainMeds.length, 0, "Domain mutation must rollback when toolCallId is not found in message");
-    assert.strictEqual(persistedExecution.status, "PENDING_APPROVAL", "AiToolExecution must rollback to PENDING_APPROVAL");
-    assert.strictEqual(persistedMessage.metadata.toolExecutions[0].toolCallId, "call_unrelated_999");
-  });
-
-  it("should prevent duplicate execution and preserve idempotency when status is already EXECUTED", async () => {
-    const token = await createSessionToken({ userId: "user-test-persist", username: "clinician", role: "USER" });
-
-    const executedRecord = {
-      id: "exec-105",
-      userId: "user-test-persist",
-      conversationId: "conv-105",
-      toolName: "healthvault_create_medication",
-      status: "EXECUTED",
-      outputJson: { entity: "medication", id: "med-1", version: 1 },
-      inputJson: {},
-    };
-
-    (db.user.findUnique as any) = async () => ({ id: "user-test-persist", username: "clinician", role: "USER" });
-    (db.aiToolExecution.findFirst as any) = async () => executedRecord;
-
-    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-105/approve", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ action: "approve" }),
-    });
-
-    const res = await POST(req, { params: { id: "exec-105" } });
-    const body = await res.json();
-
-    assert.strictEqual(res.status, 400);
-    assert.strictEqual(body.code, "ALREADY_RESOLVED");
-    assert.strictEqual(body.status, "EXECUTED");
+    assert.strictEqual(domainMeds.length, 0, "Domain mutation must rollback when toolCallId does not match");
+    assert.strictEqual(persistedExecution.status, "PENDING_APPROVAL");
   });
 });

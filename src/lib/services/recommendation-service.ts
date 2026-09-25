@@ -78,11 +78,11 @@ export class RecommendationService {
     });
   }
 
-  static async create(userId: string, input: CreateRecommendationInput) {
+  static async create(userId: string, input: CreateRecommendationInput, txClient?: any) {
     const status = input.status || RecommendationStatus.AI_SUGGESTION;
     const sourceType = input.sourceType || SourceType.AI_AGENT;
 
-    const recommendation = await db.$transaction(async (tx) => {
+    const runInTx = async (tx: any) => {
       const rec = await tx.recommendation.create({
         data: {
           userId,
@@ -112,7 +112,9 @@ export class RecommendationService {
       });
 
       return rec;
-    });
+    };
+
+    const recommendation = txClient ? await runInTx(txClient) : await db.$transaction(runInTx);
 
     await logAudit({
       userId,
@@ -125,7 +127,7 @@ export class RecommendationService {
         version: 1,
         sourceType,
       },
-    });
+    }, txClient);
 
     return recommendation;
   }
@@ -183,7 +185,7 @@ export class RecommendationService {
         reason: input.changeReason,
         actorType: input.actorType,
       },
-    });
+    }, txClient);
 
     return updated;
   }

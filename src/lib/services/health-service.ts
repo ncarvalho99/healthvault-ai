@@ -12,9 +12,11 @@ export class HealthService {
       waistCm?: number;
       notes?: string;
       conversationId?: string;
-    }
+    },
+    txClient?: any
   ) {
-    const metric = await db.bodyMetric.create({
+    const client = txClient || db;
+    const metric = await client.bodyMetric.create({
       data: {
         userId,
         weightKg: data.weightKg,
@@ -33,7 +35,7 @@ export class HealthService {
       entity: "BODY_METRIC",
       entityId: metric.id,
       metadata: { weightKg: data.weightKg, bodyFatPct: data.bodyFatPct },
-    });
+    }, txClient);
 
     return metric;
   }
@@ -47,9 +49,11 @@ export class HealthService {
       possibleTrigger?: string;
       medicationId?: string;
       conversationId?: string;
-    }
+    },
+    txClient?: any
   ) {
-    const symptom = await db.symptom.create({
+    const client = txClient || db;
+    const symptom = await client.symptom.create({
       data: {
         userId,
         symptom: data.symptom,
@@ -68,7 +72,7 @@ export class HealthService {
       entity: "SYMPTOM",
       entityId: symptom.id,
       metadata: { symptom: data.symptom, severity: data.severity },
-    });
+    }, txClient);
 
     return symptom;
   }
@@ -113,7 +117,7 @@ export class HealthService {
       entity: "LAB_TEST",
       entityId: lab.id,
       metadata: { markerName: data.markerName, value: `${data.resultValue} ${data.unit}` },
-    });
+    }, txClient);
 
     return lab;
   }

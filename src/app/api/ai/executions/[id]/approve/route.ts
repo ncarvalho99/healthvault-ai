@@ -180,14 +180,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const meta = args._proposalMeta;
 
     if (action === "reject") {
-      await db.$transaction(async (tx) => {
-        await tx.aiToolExecution.update({
-          where: { id: execution.id },
+      const rejectResult = await db.$transaction(async (tx) => {
+        // Compare-and-set claim for reject
+        const claim = await tx.aiToolExecution.updateMany({
+          where: {
+            id: execution.id,
+            userId: user!.userId,
+            status: "PENDING_APPROVAL",
+          },
           data: {
             status: "REJECTED",
             completedAt: new Date(),
           },
         });
+
+        if (claim.count !== 1) {
+          return { type: "ALREADY_RESOLVED" as const };
+        }
 
         await syncMessageToolExecution(tx, {
           conversationId: execution.conversationId,
@@ -196,21 +205,51 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           toolCallId: execution.toolCallId,
           action: "reject",
         });
+
+        await logAudit({
+          userId: user!.userId,
+          action: "AI_TOOL_REJECTED",
+          entity: "AI_TOOL_EXECUTION",
+          entityId: execution.id,
+          metadata: { toolName: execution.toolName, input: args },
+        }, tx);
+
+        return { type: "REJECTED" as const };
       });
 
-      await logAudit({
-        userId: user!.userId,
-        action: "AI_TOOL_REJECTED",
-        entity: "AI_TOOL_EXECUTION",
-        entityId: execution.id,
-        metadata: { toolName: execution.toolName, input: args },
-      });
+      if (rejectResult.type === "ALREADY_RESOLVED") {
+        return NextResponse.json(
+          {
+            error: "Esta execução já foi processada ou está sendo executada concorrentemente.",
+            code: "ALREADY_RESOLVED",
+          },
+          { status: 400 }
+        );
+      }
 
       return NextResponse.json({ success: true, status: "REJECTED" });
     }
 
-    // Action == approve: Encompass TTL re-check, version re-check, domain mutation, AiToolExecution and Message metadata in one transaction!
+    // Action == approve: Encompass atomic CAS claim, TTL check, version check, domain mutation, AiToolExecution, and Message metadata in ONE transaction!
     const txResult = await db.$transaction(async (tx) => {
+      // 0. Compare-and-set atomic claim: PENDING_APPROVAL -> EXECUTING
+      const claim = await tx.aiToolExecution.updateMany({
+        where: {
+          id: execution.id,
+          userId: user!.userId,
+          status: "PENDING_APPROVAL",
+        },
+        data: {
+          status: "EXECUTING",
+        },
+      });
+
+      if (claim.count !== 1) {
+        return {
+          type: "ALREADY_RESOLVED" as const,
+        };
+      }
+
       // 1. Re-check Proposal TTL / Expiration inside transaction
       if (meta?.expiresAt) {
         const isExpired = new Date() > new Date(meta.expiresAt);
@@ -238,6 +277,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             errorMessage: expiredMsg,
           });
 
+          await logAudit({
+            userId: user!.userId,
+            action: "AI_TOOL_PROPOSAL_EXPIRED",
+            entity: "AI_TOOL_EXECUTION",
+            entityId: execution.id,
+            metadata: { toolName: execution.toolName, expiredAt: meta.expiresAt },
+          }, tx);
+
           return {
             type: "EXPIRED" as const,
             error: expiredMsg,
@@ -246,7 +293,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         }
       }
 
-      // 2. Re-check Optimistic Concurrency / Version Conflict inside transaction
+      // 2. Re-check Optimistic Concurrency / Version Conflict inside transaction using tx
       if (meta?.entityVersionAtProposal !== undefined && meta?.entityId) {
         if (meta.entityType === "medication") {
           const currentMed = await tx.medication.findUnique({
@@ -276,6 +323,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
               errorCode: "VERSION_CONFLICT",
               errorMessage: conflictMsg,
             });
+
+            await logAudit({
+              userId: user!.userId,
+              action: "AI_TOOL_VERSION_CONFLICT",
+              entity: "AI_TOOL_EXECUTION",
+              entityId: execution.id,
+              metadata: { toolName: execution.toolName, currentVersion, proposalVersion: meta.entityVersionAtProposal },
+            }, tx);
 
             return {
               type: "CONFLICT" as const,
@@ -309,6 +364,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
               errorCode: "VERSION_CONFLICT",
               errorMessage: conflictMsg,
             });
+
+            await logAudit({
+              userId: user!.userId,
+              action: "AI_TOOL_VERSION_CONFLICT",
+              entity: "AI_TOOL_EXECUTION",
+              entityId: execution.id,
+              metadata: { toolName: execution.toolName, currentVersion: currentDiet.currentVersion, proposalVersion: meta.entityVersionAtProposal },
+            }, tx);
 
             return {
               type: "CONFLICT" as const,
@@ -344,6 +407,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
               errorMessage: conflictMsg,
             });
 
+            await logAudit({
+              userId: user!.userId,
+              action: "AI_TOOL_VERSION_CONFLICT",
+              entity: "AI_TOOL_EXECUTION",
+              entityId: execution.id,
+              metadata: { toolName: execution.toolName, currentVersion: currentRec.currentVersion, proposalVersion: meta.entityVersionAtProposal },
+            }, tx);
+
             return {
               type: "CONFLICT" as const,
               error: conflictMsg,
@@ -360,12 +431,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         const created = await MedicationService.create(user!.userId, {
           name: args.name,
           genericName: args.generic_name,
+          brandName: args.brand_name,
           category: args.category,
           form: args.form,
           doseValue: args.dose_value,
           doseUnit: args.dose_unit,
           frequency: args.frequency,
           schedule: args.schedule,
+          route: args.route,
+          instructions: args.instructions,
           changeReason: args.reason || "Aprovado manualmente pelo usuário",
           conversationId: execution.conversationId,
           actorType: ActorType.USER,
@@ -384,6 +458,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           doseUnit: args.dose_unit,
           frequency: args.frequency,
           schedule: args.schedule,
+          route: args.route,
+          instructions: args.instructions,
           changeReason: args.reason || "Ajuste aprovado pelo usuário",
           conversationId: execution.conversationId,
           actorType: ActorType.USER,
@@ -391,8 +467,65 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           informationOrigin: "USER_REPORTED",
         }, tx);
         outputResult = { entity: "medication", id: med.id, name: med.name, version: updatedMed.version.versionNumber };
+      } else if (execution.toolName === "healthvault_stop_medication") {
+        let med = await MedicationService.getById(user!.userId, args.medication_id, tx);
+        if (!med) med = await MedicationService.findByName(user!.userId, args.medication_id, tx);
+        if (!med) throw new Error("Medicamento associado não encontrado.");
+
+        const stoppedMed = await MedicationService.stopMedication(
+          user!.userId,
+          med.id,
+          args.reason || "Medicamento descontinuado pelo usuário",
+          execution.conversationId,
+          tx
+        );
+        outputResult = { entity: "medication", id: med.id, name: med.name, status: "DISCONTINUED", version: stoppedMed.currentVersion };
+      } else if (execution.toolName === "healthvault_create_recommendation") {
+        const created = await RecommendationService.create(user!.userId, {
+          title: args.title,
+          notes: args.notes,
+          status: args.status,
+          sourceType: "AI_AGENT",
+          sourceName: user!.username,
+          conversationId: execution.conversationId,
+          changeReason: args.reason || "Recomendação aprovada pelo usuário",
+        }, tx);
+        outputResult = { entity: "recommendation", id: created.id, title: created.title, version: 1 };
+      } else if (execution.toolName === "healthvault_update_recommendation") {
+        const existing = await tx.recommendation.findFirst({
+          where: { id: args.recommendation_id, userId: user!.userId },
+          include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
+        });
+        if (!existing) throw new Error("Recomendação associada não encontrada.");
+
+        const updated = await RecommendationService.update(user!.userId, {
+          recommendationId: existing.id,
+          title: args.title,
+          notes: args.notes,
+          status: args.status,
+          summarySnapshot: (existing.versions[0]?.summarySnapshot as any) || {},
+          changeReason: args.reason || "Aprovado pelo usuário",
+          conversationId: execution.conversationId,
+          actorType: ActorType.USER,
+          informationOrigin: "USER_REPORTED",
+        }, tx);
+        outputResult = { entity: "recommendation", id: updated.id, version: updated.currentVersion };
+      } else if (execution.toolName === "healthvault_create_diet") {
+        const createdDiet = await DietService.create(user!.userId, {
+          title: args.title,
+          goal: args.goal,
+          targetCalories: args.target_calories,
+          targetProteinG: args.target_protein_g,
+          targetCarbsG: args.target_carbs_g,
+          targetFatG: args.target_fat_g,
+          changeReason: args.reason || "Plano nutricional aprovado pelo usuário",
+          conversationId: execution.conversationId,
+          informationOrigin: "USER_REPORTED",
+        }, tx);
+        outputResult = { entity: "diet", id: createdDiet.id, version: 1 };
       } else if (execution.toolName === "healthvault_update_diet") {
         const updatedDiet = await DietService.update(user!.userId, {
+          dietPlanId: args.diet_plan_id,
           targetCalories: args.target_calories,
           targetProteinG: args.target_protein_g,
           targetCarbsG: args.target_carbs_g,
@@ -402,7 +535,27 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           informationOrigin: "USER_REPORTED",
         }, tx);
         outputResult = { entity: "diet", id: updatedDiet.plan.id, version: updatedDiet.version.versionNumber };
-      } else if (execution.toolName === "healthvault_add_lab") {
+      } else if (execution.toolName === "healthvault_add_body_metric") {
+        const metric = await HealthService.addBodyMetric(user!.userId, {
+          weightKg: args.weight_kg,
+          bodyFatPct: args.body_fat_pct,
+          waistCm: args.waist_cm,
+          muscleMassKg: args.muscle_mass_kg,
+          notes: args.notes,
+          conversationId: execution.conversationId,
+        }, tx);
+        outputResult = { entity: "metric", id: metric.id, weightKg: metric.weightKg };
+      } else if (execution.toolName === "healthvault_add_symptom") {
+        const symptom = await HealthService.addSymptom(user!.userId, {
+          symptom: args.symptom,
+          severity: args.severity,
+          description: args.description,
+          possibleTrigger: args.possible_trigger,
+          medicationId: args.medication_id,
+          conversationId: execution.conversationId,
+        }, tx);
+        outputResult = { entity: "symptom", id: symptom.id, symptom: symptom.symptom, severity: symptom.severity };
+      } else if (execution.toolName === "healthvault_add_lab_result") {
         const lab = await HealthService.addLabResult(user!.userId, {
           testName: args.test_name,
           category: args.category,
@@ -415,24 +568,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           conversationId: execution.conversationId,
         }, tx);
         outputResult = { entity: "lab", id: lab.id, markerName: lab.markerName, value: `${lab.resultValue} ${lab.unit}` };
-      } else if (execution.toolName === "healthvault_update_recommendation") {
-        const existing = await tx.recommendation.findFirst({
-          where: { id: args.recommendation_id, userId: user!.userId },
-          include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
-        });
-        if (existing) {
-          const updated = await RecommendationService.update(user!.userId, {
-            recommendationId: existing.id,
-            title: args.title,
-            notes: args.notes,
-            summarySnapshot: (existing.versions[0]?.summarySnapshot as any) || {},
-            changeReason: args.reason || "Aprovado pelo usuário",
-            conversationId: execution.conversationId,
-            actorType: ActorType.USER,
-            informationOrigin: "USER_REPORTED",
-          }, tx);
-          outputResult = { entity: "recommendation", id: updated.id, version: updated.currentVersion };
-        }
+      } else {
+        throw new Error(`UNSUPPORTED_APPROVAL_TOOL: Tool '${execution.toolName}' is not supported for approval.`);
+      }
+
+      if (!outputResult) {
+        throw new Error(`UNSUPPORTED_APPROVAL_TOOL: Tool '${execution.toolName}' produced no output result.`);
       }
 
       // 4. Mark as EXECUTED in tx
@@ -457,41 +598,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         outputResult,
       });
 
+      await logAudit({
+        userId: user!.userId,
+        action: "AI_TOOL_APPROVED",
+        entity: "AI_TOOL_EXECUTION",
+        entityId: execution.id,
+        metadata: { toolName: execution.toolName, result: outputResult },
+      }, tx);
+
       return {
         type: "SUCCESS" as const,
         outputResult,
       };
     });
 
+    if (txResult.type === "ALREADY_RESOLVED") {
+      return NextResponse.json(
+        {
+          error: "Esta execução já foi processada ou está sendo executada concorrentemente.",
+          code: "ALREADY_RESOLVED",
+        },
+        { status: 400 }
+      );
+    }
+
     if (txResult.type === "EXPIRED") {
-      await logAudit({
-        userId: user!.userId,
-        action: "AI_TOOL_PROPOSAL_EXPIRED",
-        entity: "AI_TOOL_EXECUTION",
-        entityId: execution.id,
-        metadata: { toolName: execution.toolName, expiredAt: meta?.expiresAt },
-      });
       return NextResponse.json({ error: txResult.error, code: txResult.code }, { status: 410 });
     }
 
     if (txResult.type === "CONFLICT") {
-      await logAudit({
-        userId: user!.userId,
-        action: "AI_TOOL_VERSION_CONFLICT",
-        entity: "AI_TOOL_EXECUTION",
-        entityId: execution.id,
-        metadata: { toolName: execution.toolName, proposalVersion: meta?.entityVersionAtProposal },
-      });
       return NextResponse.json({ error: txResult.error, code: txResult.code }, { status: 409 });
     }
-
-    await logAudit({
-      userId: user!.userId,
-      action: "AI_TOOL_APPROVED",
-      entity: "AI_TOOL_EXECUTION",
-      entityId: execution.id,
-      metadata: { toolName: execution.toolName, result: txResult.outputResult },
-    });
 
     return NextResponse.json({ success: true, status: "EXECUTED", result: txResult.outputResult });
   } catch (error: any) {

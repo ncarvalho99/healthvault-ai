@@ -11,38 +11,44 @@ export interface LogAuditParams {
   metadata?: Record<string, unknown> | null;
 }
 
-export async function logAudit(params: LogAuditParams): Promise<void> {
-  try {
-    // Sanitization: Never log passwords, tokens, full keys, or cookie contents
-    const sanitizedMetadata: Record<string, unknown> = {};
-    if (params.metadata) {
-      for (const [key, value] of Object.entries(params.metadata)) {
-        const lowerKey = key.toLowerCase();
-        if (
-          lowerKey.includes("password") ||
-          lowerKey.includes("token") ||
-          lowerKey.includes("secret") ||
-          lowerKey.includes("cookie") ||
-          lowerKey.includes("auth")
-        ) {
-          sanitizedMetadata[key] = "[REDACTED]";
-        } else {
-          sanitizedMetadata[key] = value;
-        }
+export async function logAudit(params: LogAuditParams, txClient?: any): Promise<void> {
+  // Sanitization: Never log passwords, tokens, full keys, or cookie contents
+  const sanitizedMetadata: Record<string, unknown> = {};
+  if (params.metadata) {
+    for (const [key, value] of Object.entries(params.metadata)) {
+      const lowerKey = key.toLowerCase();
+      if (
+        lowerKey.includes("password") ||
+        lowerKey.includes("token") ||
+        lowerKey.includes("secret") ||
+        lowerKey.includes("cookie") ||
+        lowerKey.includes("auth")
+      ) {
+        sanitizedMetadata[key] = "[REDACTED]";
+      } else {
+        sanitizedMetadata[key] = value;
       }
     }
+  }
 
-    await db.auditLog.create({
-      data: {
-        userId: params.userId || null,
-        action: params.action,
-        entity: params.entity,
-        entityId: params.entityId || null,
-        ipAddress: params.ipAddress || null,
-        userAgent: params.userAgent || null,
-        metadata: sanitizedMetadata as Prisma.InputJsonValue,
-      },
-    });
+  const payload = {
+    userId: params.userId || null,
+    action: params.action,
+    entity: params.entity,
+    entityId: params.entityId || null,
+    ipAddress: params.ipAddress || null,
+    userAgent: params.userAgent || null,
+    metadata: sanitizedMetadata as Prisma.InputJsonValue,
+  };
+
+  if (txClient) {
+    // Transactional mode: participate in caller's transaction and do NOT swallow error
+    await txClient.auditLog.create({ data: payload });
+    return;
+  }
+
+  try {
+    await db.auditLog.create({ data: payload });
   } catch (error) {
     console.error("Audit logging failed:", error);
   }

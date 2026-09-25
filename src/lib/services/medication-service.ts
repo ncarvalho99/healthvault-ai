@@ -136,7 +136,7 @@ export class MedicationService {
         actorType: input.actorType,
         origin: input.informationOrigin,
       },
-    });
+    }, txClient);
 
     return med;
   }
@@ -213,13 +213,14 @@ export class MedicationService {
         changeReason: input.changeReason,
         actorType: input.actorType,
       },
-    });
+    }, txClient);
 
     return updated;
   }
 
-  static async stopMedication(userId: string, medicationId: string, reason: string, conversationId?: string) {
-    const med = await db.medication.findFirst({
+  static async stopMedication(userId: string, medicationId: string, reason: string, conversationId?: string, txClient?: any) {
+    const client = txClient || db;
+    const med = await client.medication.findFirst({
       where: { id: medicationId, userId },
       include: {
         versions: {
@@ -234,7 +235,7 @@ export class MedicationService {
     const latest = med.versions[0];
     const nextVer = latest ? latest.versionNumber + 1 : 1;
 
-    const stopped = await db.$transaction(async (tx) => {
+    const runInTx = async (tx: any) => {
       if (latest && !latest.endDate) {
         await tx.medicationVersion.update({
           where: { id: latest.id },
@@ -260,16 +261,18 @@ export class MedicationService {
         where: { id: med.id },
         data: { isActive: false, updatedAt: new Date() },
       });
-    });
+    };
+
+    const stopped = txClient ? await runInTx(txClient) : await db.$transaction(runInTx);
 
     await logAudit({
       userId,
       action: "MEDICATION_STOPPED",
       entity: "MEDICATION",
       entityId: med.id,
-      metadata: { name: med.name, reason },
-    });
+      metadata: { name: med.name, reason, version: nextVer },
+    }, txClient);
 
-    return stopped;
+    return { medication: stopped, currentVersion: nextVer };
   }
 }
