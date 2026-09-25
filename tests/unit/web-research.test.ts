@@ -221,6 +221,28 @@ describe("Web-First Research — ResearchIntentAnalyzer", () => {
     assert.strictEqual(res.requiresExternalResearch, true);
     assert.strictEqual(res.isClinicalSafetyQuery, true);
   });
+
+  it("should classify MIXED queries correctly and trigger external research", () => {
+    // 1. Interaction query with personal vault reference
+    const mixed1 = ResearchIntentAnalyzer.analyze("Meu medicamento atual possui alguma interação conhecida com metformina?");
+    assert.strictEqual(mixed1.intent, "MIXED");
+    assert.strictEqual(mixed1.requiresExternalResearch, true);
+
+    // 2. Dosage vs official leaflet query
+    const mixed2 = ResearchIntentAnalyzer.analyze("Minha dose atual está de acordo com a bula?");
+    assert.strictEqual(mixed2.intent, "MIXED");
+    assert.strictEqual(mixed2.requiresExternalResearch, true);
+
+    // 3. Side effects query
+    const mixed3 = ResearchIntentAnalyzer.analyze("Os efeitos que estou sentindo são conhecidos para meu medicamento?");
+    assert.strictEqual(mixed3.intent, "MIXED");
+    assert.strictEqual(mixed3.requiresExternalResearch, true);
+
+    // 4. Pure local query
+    const local = ResearchIntentAnalyzer.analyze("Qual é meu medicamento atual?");
+    assert.strictEqual(local.intent, "LOCAL_VAULT_ONLY");
+    assert.strictEqual(local.requiresExternalResearch, false);
+  });
 });
 
 describe("Web-First Research — SourceRanking & Minimum Evidence Policy", () => {
@@ -482,6 +504,49 @@ describe("Web-First Research — Regression Tests (Retatrutide & Fail-Closed Sce
       assert.strictEqual(result.policy, "REQUIRED");
       assert.ok(result.sources.length >= 1);
       assert.strictEqual(result.sources[0].sourceDomain, "clinicaltrials.gov");
+      assert.ok(result.contextBlock && result.contextBlock.includes("<web_research"));
+    } finally {
+      ResearchOrchestrator.getProviderChain = origGet;
+    }
+  });
+
+  it("regression: 'Meu medicamento atual possui alguma interação conhecida com metformina?' should execute Web Research as MIXED under REQUIRED policy", async () => {
+    ResearchCache.clear();
+    class MockInteractionProvider implements WebResearchProvider {
+      name = "mock_interaction";
+      async search() {
+        return [
+          {
+            id: "int_s1",
+            title: "Metformin Drug Interactions and Warnings - FDA",
+            url: "https://www.fda.gov/drugs/metformin-interactions",
+            snippet: "Metformin interaction profiles with GLP-1 receptor agonists and other agents.",
+            tier: 1,
+            isAnecdotal: false,
+            retrievedAt: new Date().toISOString(),
+          },
+        ];
+      }
+      async healthCheck() {
+        return { ok: true, provider: this.name, status: "HEALTHY" as const };
+      }
+    }
+
+    const { ResearchOrchestrator } = await import("../../src/lib/ai/research/research-orchestrator");
+    const origGet = ResearchOrchestrator.getProviderChain;
+    ResearchOrchestrator.getProviderChain = () => [new MockInteractionProvider()];
+
+    try {
+      const result = await ResearchOrchestrator.execute({
+        userMessage: "Meu medicamento atual possui alguma interação conhecida com metformina?",
+        modelId: "health-ai",
+      });
+
+      assert.strictEqual(result.status, "SUCCESS");
+      assert.strictEqual(result.policy, "REQUIRED");
+      assert.strictEqual(result.intent, "MIXED");
+      assert.ok(result.sources.length >= 1);
+      assert.strictEqual(result.sources[0].sourceDomain, "fda.gov");
       assert.ok(result.contextBlock && result.contextBlock.includes("<web_research"));
     } finally {
       ResearchOrchestrator.getProviderChain = origGet;

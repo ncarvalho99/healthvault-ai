@@ -187,14 +187,21 @@ export class SourceRanking {
       else if (tier === 2) baseScore = 700;
       else if (tier === 4 || isAnecdotal) baseScore = 50;
 
-      // Clinical relevance bonuses
+      // Clinical relevance & temporal grounding bonuses
       let bonus = 0;
       const textToSearch = `${r.title} ${r.snippet || ""}`.toLowerCase();
-      if (/clinicaltrials\.gov|nct\d{8}/i.test(textToSearch)) bonus += 200;
+      if (/clinicaltrials\.gov|nct\d{8}/i.test(textToSearch)) bonus += 220;
       if (/phase\s+(1|2|3|i|ii|iii)|randomized|double-blind|placebo/i.test(textToSearch)) bonus += 150;
-      if (/fda approval|anvisa|ema|prescribing information|package insert/i.test(textToSearch)) bonus += 120;
+      if (/fda approval|anvisa|ema|prescribing information|package insert/i.test(textToSearch)) bonus += 140;
       if (/peer-reviewed|journal|lancet|nejm|jama/i.test(textToSearch)) bonus += 100;
-      if (/202[456]/i.test(textToSearch)) bonus += 50;
+
+      // Temporal grounding from publishedAt or content year
+      if (r.publishedAt) {
+        if (/202[56]/i.test(r.publishedAt)) bonus += 160;
+        else if (/2024/i.test(r.publishedAt)) bonus += 80;
+      } else if (/202[56]/i.test(textToSearch)) {
+        bonus += 90;
+      }
 
       const totalScore = baseScore + bonus;
 

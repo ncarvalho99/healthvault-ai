@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
 
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || req.ip || "127.0.0.1";
   const userAgent = req.headers.get("user-agent") || "unknown";
+  let userMessage: any = null;
 
   try {
     const body = await req.json();
@@ -109,7 +110,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Save User message
-    const userMessage = await db.message.create({
+    userMessage = await db.message.create({
       data: {
         conversationId,
         senderType: SenderType.USER,
@@ -216,6 +217,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
 
       return NextResponse.json({
         success: true,
+        userMessage,
         message: assistantFailRecord,
         toolExecutions: [],
         research: {
@@ -365,6 +367,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
           model: activeModel,
           integrationId: integration.id,
           executedTools: executedToolsList.map((t) => t.toolName),
+          toolExecutions: executedToolsList,
           iterations: iteration,
           agentMode,
           correlationId,
@@ -411,6 +414,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
 
     return NextResponse.json({
       success: true,
+      userMessage,
       message: assistantRecord,
       toolExecutions: executedToolsList,
     });
@@ -429,6 +433,7 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
       {
         error: error?.message || "Falha ao comunicar com o OmniRoute. A mensagem do usuário foi salva.",
         code: "AI_CHAT_FAILED",
+        userMessage: typeof userMessage !== "undefined" ? userMessage : undefined,
       },
       { status: 500 }
     );

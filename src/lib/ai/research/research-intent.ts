@@ -6,20 +6,23 @@ const LOCAL_VAULT_PATTERNS = [
   /\bquais\s+(rem[eé]dios|medicamentos|exames|sintomas)\s+(eu\s+tomo|eu\s+tenho|est[aã]o\s+registrados)\b/i,
   /\b(adicione|adicionar|registre|registrar|salve|salvar|altere|alterar|atualize|atualizar|mude|mudar|remova|remover|exclua|excluir)\b.*\b(medicamento|rem[eé]dio|dose|dieta|caloria|peso|press[aã]o|sintoma)\b/i,
   /\b(o\s+que|quanto)\s+(eu\s+como|eu\s+tomo|eu\s+peso|registrei)\b/i,
-  /\b(minha\s+rotina|minha\s+evolu[cç][aã]o|meu\s+progresso)\b/i,
+  /\b(minha\s+rotina|minha\s+evolu[cç][aã]o|meu\s+progresso|efeitos?\s+que\s+estou\s+sentindo)\b/i,
 ];
 
-// Clinical & external factual knowledge patterns
+// Clinical & external factual knowledge patterns (guidelines, interactions, trials, approvals, safety)
 const EXTERNAL_FACT_PATTERNS = [
-  /\b(guideline|diretriz|diretrizes|consenso|posologia|farmacocin[eé]tica|mecanismo\s+de\s+a[cç][aã]o)\b/i,
-  /\b(interao|interage|interagir|rea[cç][aã]o\s+adversa|efeito\s+colateral|contraindica[cç][aã]o|toxicidade)\b/i,
-  /\b(ensaio\s+cl[ií]nico|clinical\s+trial|estudo\s+cl[ií]nico|fase\s+[1234]|fase\s+iii|fase\s+ii)\b/i,
-  /\b(aprova[cç][aã]o|aprovado|regulamenta[cç][aã]o)\s+(pela\s+|pelo\s+)?(anvisa|fda|ema|conitec)\b/i,
-  /\b(retatrutide|retatrutida|slu-pp-332|mots-c|tirzepatide|tirzepatida|semaglutide|semaglutida|ozempic|mounjaro|wegovy|zepbound|cagrilintide|survodutide|orforglipron)\b/i,
-  /\b(pept[ií]deo|pept[ií]deos|sarm|nootr[oó]pico|composto\s+experimental|subst[aâ]ncia\s+experimental)\b/i,
+  /\b(guidelines?|diretriz|diretrizes|consenso|posologia|farmacocin[eé]tica|mecanismos?(\s+de\s+a[cç][aã]o)?|bula)\b/i,
+  /\b(intera[cç][aã]o|intera[cç][oõ]es|interacao|interacoes|interage|interagir|combina[cç][aã]o|combina[cç][oõ]es|combinacao|combinacoes|combinar|usar\s+junto|tomar\s+junto|compatibilidade)\b/i,
+  /\b(rea[cç][aã]o\s+adversa|rea[cç][oõ]es\s+adversas|reacao\s+adversa|reacoes\s+adversas|efeitos?\s+adversos?|efeitos?\s+colaterais?|efeito\s+colateral|contraindica[cç][aã]o|contraindica[cç][oõ]es|contraindicacao|contraindicacoes|toxicidade|seguran[cç]a|seguranca|riscos?)\b/i,
+  /\b(efeitos?|sintomas?)\s+(que\s+estou\s+sentindo|conhecid[oa]s?|esperad[oa]s?|secund[aá]ri[oa]s?|comuns?)\b/i,
+  /\b(s[aã]o|sao|[eé])\s+(conhecid[oa]s?|esperad[oa]s?|comuns?)\b/i,
+  /\b(ensaio\s+cl[ií]nico|ensaios\s+cl[ií]nicos|clinical\s+trials?|estudos?\s+cl[ií]nicos?|estudos?|evid[eê]ncias?|evidencia|fase\s+[1234]|fase\s+iii|fase\s+ii)\b/i,
+  /\b(aprova[cç][aã]o|aprovad[oa]s?|regulamenta[cç][aã]o)\s*(pela\s+|pelo\s+)?(anvisa|fda|ema|conitec)?\b/i,
+  /\b(retatrutide|retatrutida|slu-pp-332|mots-c|tirzepatide|tirzepatida|semaglutide|semaglutida|ozempic|mounjaro|wegovy|zepbound|cagrilintide|survodutide|orforglipron|metformina|metformin)\b/i,
+  /\b(pept[ií]deos?|sarm|nootr[oó]picos?|compostos?\s+experimentais?|subst[aâ]ncias?\s+experimentais?)\b/i,
   /\b(o\s+que\s+[eé]|como\s+funciona|para\s+que\s+serve|qual\s+a\s+fun[cç][aã]o\s+de)\b/i,
   /\b(qual\s+a\s+dose\s+recomendada|como\s+tomar|qual\s+o\s+protocolo\s+de\s+titula[cç][aã]o)\b/i,
-  /\b(seguran[cç]a|efic[aá]cia|riscos|benef[ií]cios)\s+d[eo]\b/i,
+  /\b(seguran[cç]a|efic[aá]cia|riscos?|benef[ií]cios?)\s+d[eo]\b/i,
 ];
 
 // Explicit recency / latest information patterns
@@ -84,7 +87,12 @@ export class ResearchIntentAnalyzer {
     let requiresExternalResearch = false;
     let reason = "General chat or personal vault inspection";
 
-    if (isLocalVault && !hasExternalKnowledge) {
+    if (isLocalVault && hasExternalKnowledge) {
+      // Mixed: combines personal context (e.g. "meu medicamento", "minha dose") with external clinical facts/interactions/guidelines
+      intent = "MIXED";
+      requiresExternalResearch = true;
+      reason = "Query combines personal vault context with external clinical validation, interactions, or guidelines";
+    } else if (isLocalVault && !hasExternalKnowledge) {
       // Strictly personal vault queries ("qual minha dieta atual?", "meus remédios")
       intent = "LOCAL_VAULT_ONLY";
       requiresExternalResearch = false;
@@ -101,11 +109,6 @@ export class ResearchIntentAnalyzer {
       intent = "EXTERNAL_KNOWLEDGE";
       requiresExternalResearch = true;
       reason = `Query references specific clinical entity (${entities.join(", ")}) outside personal vault context`;
-    } else if (isLocalVault && hasExternalKnowledge) {
-      // Mixed: e.g. "minha dose de semaglutida está certa considerando o guideline da FDA?"
-      intent = "EXTERNAL_KNOWLEDGE";
-      requiresExternalResearch = true;
-      reason = "Query combines personal vault context with external medical validation";
     }
 
     // Build deterministic query expansion and domain-targeted queries
@@ -133,7 +136,25 @@ export class ResearchIntentAnalyzer {
     const suggested: string[] = [];
     const targeted: string[] = [];
 
-    if (entities.length > 0) {
+    if (intent === "MIXED") {
+      if (entities.length > 0) {
+        const primary = entities[0];
+        suggested.push(`${primary} drug interactions contraindications`);
+        suggested.push(`${primary} clinical guidelines dosage`);
+        targeted.push(`site:pubmed.ncbi.nlm.nih.gov ${primary} drug interaction`);
+        targeted.push(`site:fda.gov ${primary} prescribing information`);
+      } else {
+        const cleaned = text
+          .replace(/[?.,!;]/g, "")
+          .replace(/\b(qual|quais|como|quando|onde|por que|o que|sobre|me diga|explique|meu|minha|meus|minhas|atual|atuais)\b/gi, "")
+          .trim();
+        if (cleaned.length > 3) {
+          suggested.push(`${cleaned} drug interactions`);
+          suggested.push(`${cleaned} clinical guidelines`);
+          targeted.push(`site:fda.gov ${cleaned}`);
+        }
+      }
+    } else if (entities.length > 0) {
       const primary = entities[0];
 
       // Query expansion: 3 distinct angles

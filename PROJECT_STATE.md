@@ -49,7 +49,7 @@ OmniRoute Gateway (Local / Homelab — Combos de Inferência: exploit, demigod-f
 
 | Ação | Comando | Descrição |
 |---|---|---|
-| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 82 testes unitários (`node:test` + `tsx` em 29 suítes) |
+| **Testes Unitários** | `pnpm test` ou `pnpm run test:unit` | Executa a suíte de 88 testes unitários (`node:test` + `tsx` em 31 suítes) |
 | **Testes E2E** | `pnpm run test:e2e` | Executa a suíte de testes E2E com gateway |
 | **Todos os Testes** | `pnpm run test:all` | Roda testes unitários e E2E consolidados |
 | **Limpeza de Reasoning** | `pnpm run clean:reasoning -- --dry-run` | Varre o banco em busca de tags de reasoning legadas (modo seguro) |
@@ -158,6 +158,16 @@ E2E_AI_MODEL="exploit"
    - **Resolução de Referências Pessoais**: Desambiguação inteligente de múltiplos medicamentos ativos e grounding automático.
    - **Chat Apenas Read-Only com Trava de Defesa em Profundidade**: No modo `CHAT_ONLY`, ferramentas de leitura (`healthvault_get_context`, `healthvault_search`, etc.) são fornecidas para consulta ao prontuário, enquanto mutações de escrita são bloqueadas no `ToolDispatcher` com código `READ_ONLY_MODE`.
    - **Políticas Web-First e Reasoning**: `ResearchPolicy = REQUIRED` e `ReasoningPolicy = DISABLED` aplicadas centralmente.
+10. **Grounding Funcional & Consistência de UI do Chat**:
+    - **Reconciliação Otimista de Mensagens Sem Perda de Histórico**: Substituição cirúrgica do ID temporário (`tempId`) pelo registro real persistido no PostgreSQL retornado em `data.userMessage`, eliminando o filtro destrutivo que expurgava mensagens anteriores do usuário.
+    - **Cards de Ferramentas Associados por Mensagem**: Removido o bloco global de tool cards no rodapé do chat. Agora as execuções de ferramentas são associadas à mensagem de IA específica (`msg.metadata.toolExecutions`), persistindo com a conversa.
+    - **Semântica e Rótulos Amigáveis de Ferramentas**:
+      - `healthvault_ping` oculto da timeline do chat.
+      - Ferramentas de leitura (`access === "read"`) exibidas de forma compacta e discreta (*"Consultado no HealthVault"*), sem gerar falsos cards de sucesso *"HealthVault Atualizado"*.
+      - Mutações reais de escrita (`access === "write"`) identificadas com nomes claros (*"Métrica Corporal"*, *"Ajuste de Medicamento"*, *"Dieta"*).
+    - **Classificação `MIXED` em Pesquisa Web**: Perguntas combinando contexto pessoal e validação externa (ex: *"Meu medicamento atual possui alguma interação conhecida com metformina?"*) são classificadas como `MIXED` com `requiresExternalResearch = true`.
+    - **Defesa em Profundidade contra `SKIPPED` em `REQUIRED`**: Perguntas com termos clínicos externos (interações, bulas, guidelines, efeitos adversos) nunca sofrem fallback silencioso para a memória do modelo.
+    - **Preservação de Operadores `site:` e Prioridade de Query Direcionada**: Sanitizador preserva operadores como `site:clinicaltrials.gov` e garante execução de ao menos uma query domain-targeted nas 3 requisições principais.
 
 ---
 

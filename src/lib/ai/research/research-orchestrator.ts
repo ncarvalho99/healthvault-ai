@@ -113,18 +113,31 @@ export class ResearchOrchestrator {
 
     // 2. If query is strictly local vault and does not require external research:
     if (!intentAnalysis.requiresExternalResearch) {
-      return {
-        runId,
-        query: params.userMessage,
-        queryHash,
-        policy,
-        intent: intentAnalysis.intent,
-        sources: [],
-        cached: false,
-        provider: "none",
-        latencyMs: Math.round(performance.now() - start),
-        status: "SKIPPED",
-      };
+      // Defense-in-depth for policy === "REQUIRED":
+      // If user message contains explicit clinical safety, interaction, or external signals, do NOT skip silently!
+      const text = params.userMessage.toLowerCase();
+      const hasClinicalSignals =
+        /intera[cç]|combin|contraindica|efeito|bula|diretriz|guideline|estudo|ensaio|fda|anvisa|seguran[cç]a|risco/i.test(text);
+
+      if (policy === "REQUIRED" && hasClinicalSignals) {
+        // Recover and force research as MIXED rather than falling back to model memory
+        intentAnalysis.requiresExternalResearch = true;
+        intentAnalysis.intent = "MIXED";
+        intentAnalysis.reason = "Forced research under REQUIRED policy (RESEARCH_CLASSIFICATION_MISMATCH prevented)";
+      } else {
+        return {
+          runId,
+          query: params.userMessage,
+          queryHash,
+          policy,
+          intent: intentAnalysis.intent,
+          sources: [],
+          cached: false,
+          provider: "none",
+          latencyMs: Math.round(performance.now() - start),
+          status: "SKIPPED",
+        };
+      }
     }
 
     // 3. Resolve research provider chain
@@ -195,10 +208,19 @@ export class ResearchOrchestrator {
     const providersAttempted: string[] = [];
     let lastErrorDetail: string | undefined;
 
-    // Queries to execute: base queries plus first domain-targeted query if available
-    const rawQueriesToRun = [...baseQueries];
+    // Formulate queries to run, guaranteeing at least 1 domain-targeted query in the top 3
+    const rawQueriesToRun: string[] = [];
+    if (baseQueries.length > 0) {
+      rawQueriesToRun.push(baseQueries[0]);
+    }
     if (intentAnalysis.domainTargetedQueries && intentAnalysis.domainTargetedQueries.length > 0) {
       rawQueriesToRun.push(intentAnalysis.domainTargetedQueries[0]);
+    }
+    for (let i = 1; i < baseQueries.length; i++) {
+      rawQueriesToRun.push(baseQueries[i]);
+    }
+    if (intentAnalysis.domainTargetedQueries && intentAnalysis.domainTargetedQueries.length > 1) {
+      rawQueriesToRun.push(intentAnalysis.domainTargetedQueries[1]);
     }
 
     // Server-side privacy minimization & PII redaction on all search queries

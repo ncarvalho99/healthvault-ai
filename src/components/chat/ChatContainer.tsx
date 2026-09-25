@@ -24,6 +24,7 @@ import {
 import { LatestRecommendationPanel } from "../recommendations/LatestRecommendationPanel";
 import { MessageContent } from "./MessageContent";
 import { ResearchSourcesCollapsible } from "./ResearchSourcesCollapsible";
+import { MessageToolExecutions } from "./MessageToolExecutions";
 import { Toast } from "../ui/Toast";
 
 interface MessageVersion {
@@ -66,7 +67,6 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
   const [toast, setToast] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
 
   // Tool executions feedback
-  const [recentToolExecutions, setRecentToolExecutions] = useState<any[]>([]);
   const [resolvingExecId, setResolvingExecId] = useState<string | null>(null);
 
   // Edit message state
@@ -91,7 +91,21 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, agentStatus, recentToolExecutions]);
+  }, [messages, agentStatus]);
+
+  useEffect(() => {
+    if (conversation?.messages) {
+      setMessages((prev) => {
+        const pendingTemps = prev.filter((m) => m.id.startsWith("temp-"));
+        const existingIds = new Set(conversation.messages.map((m: any) => m.id));
+        const merged = [
+          ...conversation.messages,
+          ...pendingTemps.filter((t) => !existingIds.has(t.id)),
+        ];
+        return merged;
+      });
+    }
+  }, [conversation?.id, conversation?.updatedAt]);
 
   useEffect(() => {
     // Load synced models from API
@@ -155,24 +169,32 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
 
       if (!res.ok) {
         setChatError(data.error || "Falha na comunicação com o assistente.");
+        if (data.userMessage) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === tempUserMsg.id ? data.userMessage : m))
+          );
+        }
         setAgentStatus(null);
         setIsSending(false);
         return;
       }
 
-      // Add real assistant message from server
-      if (data.message) {
-        setMessages((prev) => {
-          const filtered = prev.filter((m) => !m.id.startsWith("temp-"));
-          return [...filtered, tempUserMsg, data.message];
-        });
-      }
+      // Reconcile user message: replace ONLY tempUserMsg.id with persisted data.userMessage
+      setMessages((prev) => {
+        const realUserMsg = data.userMessage || tempUserMsg;
+        const replaced = prev.map((m) => (m.id === tempUserMsg.id ? realUserMsg : m));
+        const hasUserMsg = replaced.some((m) => m.id === realUserMsg.id);
+        const listWithUser = hasUserMsg
+          ? replaced
+          : [...replaced.filter((m) => m.id !== tempUserMsg.id), realUserMsg];
 
-      // Store tool executions for in-chat action cards
-      if (data.toolExecutions && data.toolExecutions.length > 0) {
-        setRecentToolExecutions((prev) => [...prev, ...data.toolExecutions]);
-        if (onUpdateConversation) onUpdateConversation();
-      }
+        if (data.message && !listWithUser.some((m) => m.id === data.message.id)) {
+          return [...listWithUser, data.message];
+        }
+        return listWithUser;
+      });
+
+      if (onUpdateConversation) onUpdateConversation();
     } catch (err: any) {
       console.error("Chat error:", err);
       setChatError("Falha de rede ou timeout ao conectar com o OmniRoute.");
@@ -193,19 +215,30 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
 
       if (res.ok) {
         showToast(action === "approve" ? "Ação aprovada e aplicada no HealthVault!" : "Ação rejeitada.");
-        setRecentToolExecutions((prev) =>
-          prev.map((e) =>
-            e.output?.execution_id === executionId
-              ? {
-                  ...e,
-                  output: {
-                    ...e.output,
-                    requires_approval: false,
-                    resolvedAction: action,
-                  },
-                }
-              : e
-          )
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.metadata?.toolExecutions && Array.isArray(m.metadata.toolExecutions)) {
+              return {
+                ...m,
+                metadata: {
+                  ...m.metadata,
+                  toolExecutions: m.metadata.toolExecutions.map((e: any) =>
+                    e.output?.execution_id === executionId
+                      ? {
+                          ...e,
+                          output: {
+                            ...e.output,
+                            requires_approval: false,
+                            resolvedAction: action,
+                          },
+                        }
+                      : e
+                  ),
+                },
+              };
+            }
+            return m;
+          })
         );
 
         if (action === "approve" && onUpdateConversation) {
@@ -435,6 +468,15 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
                       />
                     )}
 
+                    {/* Per-message Tool Executions */}
+                    {msg.metadata?.toolExecutions && Array.isArray(msg.metadata.toolExecutions) && (
+                      <MessageToolExecutions
+                        executions={msg.metadata.toolExecutions}
+                        onApprove={handleApproveTool}
+                        resolvingExecId={resolvingExecId}
+                      />
+                    )}
+
                     {/* Edit trigger */}
                     <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
                       <button
@@ -479,104 +521,6 @@ export function ChatContainer({ conversation, onUpdateConversation }: ChatContai
                       {v.reason && <div className="text-[10px] text-emerald-400 mt-1">Motivo: {v.reason}</div>}
                     </div>
                   ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {/* Live Tool Execution & Approval Cards in Chat Stream */}
-        {recentToolExecutions.map((te, idx) => {
-          const out = te.output || {};
-          const isPending = out.requires_approval;
-          const wasResolved = out.resolvedAction;
-
-          return (
-            <div key={idx} className="my-2 max-w-xl mx-auto w-full animate-in fade-in duration-200">
-              {isPending && !wasResolved ? (
-                /* Card: Requires Manual Approval */
-                <div className="p-4 rounded-xl bg-amber-950/70 border border-amber-600/60 shadow-lg space-y-3">
-                  <div className="flex items-center gap-2 text-amber-300 font-bold text-xs uppercase tracking-wider">
-                    <AlertTriangle className="w-4 h-4 text-amber-400" />
-                    <span>Ação Requer Aprovação Clínica (Diretriz de Segurança)</span>
-                  </div>
-
-                  <p className="text-xs text-slate-200">{out.message || "Ação proposta pela IA."}</p>
-
-                  {out.proposal && (
-                    <div className="p-2.5 rounded bg-slate-950/80 border border-slate-800 text-xs font-mono text-slate-300">
-                      {JSON.stringify(out.proposal, null, 2)}
-                    </div>
-                  )}
-
-                  <div className="flex justify-end gap-2 pt-1">
-                    <button
-                      onClick={() => handleApproveTool(out.execution_id, "reject")}
-                      disabled={resolvingExecId === out.execution_id}
-                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                      <span>Rejeitar</span>
-                    </button>
-                    <button
-                      onClick={() => handleApproveTool(out.execution_id, "approve")}
-                      disabled={resolvingExecId === out.execution_id}
-                      className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 shadow-md shadow-emerald-950/50"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Aprovar & Gravar no Vault</span>
-                    </button>
-                  </div>
-                </div>
-              ) : wasResolved === "approve" || out.success ? (
-                /* Card: Tool Execution Successful with friendly details */
-                <div className="p-3.5 rounded-xl bg-emerald-950/50 border border-emerald-700/50 text-xs text-emerald-200 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <div>
-                      <span className="font-semibold block text-slate-100">
-                        HealthVault Atualizado: {te.toolName.replace("healthvault_", "").replace("_", " ")}
-                      </span>
-                      {out.data?.version && (
-                        <span className="text-[11px] text-emerald-300 font-mono">
-                          Versão v{out.data.version} gravada com rastreabilidade clínica.
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {out.data?.entity === "diet" && (
-                    <Link
-                      href="/diet"
-                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-900/60 px-2.5 py-1 rounded-lg"
-                    >
-                      Ver Dieta <ArrowRight className="w-3 h-3" />
-                    </Link>
-                  )}
-
-                  {out.data?.entity === "medication" && (
-                    <Link
-                      href="/medications"
-                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-900/60 px-2.5 py-1 rounded-lg"
-                    >
-                      Ver Meds <ArrowRight className="w-3 h-3" />
-                    </Link>
-                  )}
-
-                  {out.data?.entity === "recommendation" && (
-                    <Link
-                      href="/recommendations"
-                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-900/60 px-2.5 py-1 rounded-lg"
-                    >
-                      Ver Protocolo <ArrowRight className="w-3 h-3" />
-                    </Link>
-                  )}
-                </div>
-              ) : (
-                /* Card: Execution Rejected / Failed */
-                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
-                  <X className="w-4 h-4 text-slate-500" />
-                  <span>Ação cancelada ou rejeitada pelo usuário.</span>
                 </div>
               )}
             </div>

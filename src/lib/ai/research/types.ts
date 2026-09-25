@@ -10,6 +10,7 @@ export type ResearchIntentType =
   | "LOCAL_VAULT_ONLY"
   | "EXTERNAL_KNOWLEDGE"
   | "CURRENT_INFORMATION"
+  | "MIXED"
   | "AMBIGUOUS";
 
 export type FailClosedReasonCode =

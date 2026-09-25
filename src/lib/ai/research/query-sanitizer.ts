@@ -165,11 +165,18 @@ export class QuerySanitizer {
       generalClean = generalClean.replace(p, " ");
     }
 
+    const siteMatch = rawQuery.match(/\bsite:[a-zA-Z0-9.-]+/i);
+
     generalClean = generalClean
+      .replace(/\bsite:[a-zA-Z0-9.-]+/gi, "")
       .replace(/[?.,!;]/g, "")
       .replace(/\b(qual|quais|como|quando|onde|por que|o que|sobre|me diga|explique|sobre isso|ola|olá|bom dia|boa tarde|por favor)\b/gi, "")
       .replace(/\s+/g, " ")
       .trim();
+
+    if (siteMatch) {
+      generalClean = `${siteMatch[0]} ${generalClean}`.trim();
+    }
 
     return generalClean.slice(0, 100);
   }
