@@ -8,11 +8,9 @@ import { RecommendationStatus, SourceType, ActorType } from "@prisma/client";
 const createRecommendationSchema = z.object({
   conversationId: z.string().uuid().optional(),
   title: z.string().min(1, "Title is required"),
-  // Manual API/UI creation is user-authored; AI-created protocols go through the agent tools instead
+  // Provenance (source, actor, origin) is fixed server-side: manual creation is always user-authored.
+  // AI-created protocols go through the agent tools instead.
   status: z.nativeEnum(RecommendationStatus).default(RecommendationStatus.USER_NOTE),
-  sourceType: z.nativeEnum(SourceType).default(SourceType.USER_NOTE),
-  sourceName: z.string().optional(),
-  aiModel: z.string().optional(),
   notes: z.string().optional(),
   summarySnapshot: z.record(z.any()).default({}),
   changeReason: z.string().optional().default("Initial recommendation snapshot"),
@@ -75,11 +73,7 @@ export async function POST(req: NextRequest) {
       conversationId,
       title,
       status,
-      sourceType,
-      sourceName,
-      aiModel,
       notes,
-      summarySnapshot,
       changeReason,
     } = result.data;
 
@@ -88,13 +82,12 @@ export async function POST(req: NextRequest) {
       conversationId,
       title,
       status,
-      sourceType,
-      sourceName,
-      aiModel,
+      sourceType: SourceType.USER_NOTE,
+      sourceName: user!.username,
       notes,
       changeReason,
       actorType: ActorType.USER,
-      actorName: sourceName || user!.username,
+      actorName: user!.username,
       informationOrigin: "USER_REPORTED",
       // RecommendationService owns the RECOMMENDATION_CREATED audit
       auditContext: { ipAddress: ip, userAgent },

@@ -1,4 +1,5 @@
 import { SearchResult } from "../research/types";
+import { detectTopics } from "../tools/domain-intent";
 
 export interface ConsistencyGateOptions {
   userMessage: string;
@@ -110,11 +111,17 @@ export class EvidenceConsistencyGate {
     // 2. CHECKS INDEPENDENT OF WEB RESEARCH (Run even when Research=SKIPPED)
     // ==========================================
 
+    const sentences = lowerText.split(/(?<=[.!?])\s+|\n+/).filter((sentence) => sentence.trim());
+
     // 2.1 Mutually Incompatible Claims (Internal logical contradiction)
-    const claimsNotApprovedForAny =
-      /\b(n[aã]o\s+[eé]\s+aprovad[ao]\s+para\s+nenhuma\s+indica[cç][aã]o|not\s+approved\s+for\s+any\s+indication|n[aã]o\s+possui\s+aprova[cç][aã]o\s+para\s+nenhum\s+uso)\b/i.test(
-        lowerText
-      );
+    const notApprovedForAnyPattern =
+      /\b(n[aã]o\s+[eé]\s+aprovad[ao]\s+para\s+nenhuma\s+indica[cç][aã]o|not\s+approved\s+for\s+any\s+indication|n[aã]o\s+possui\s+aprova[cç][aã]o\s+para\s+nenhum\s+uso)\b/i;
+    const jurisdictionPattern =
+      /\b(no\s+brasil|nos\s+eua|nos\s+estados\s+unidos|na\s+europa|na\s+uni[aã]o\s+europeia|anvisa|fda|ema|in\s+the\s+(?:us|eu|united\s+states))\b/i;
+    // Only an unscoped absolute claim contradicts a specific approval
+    const claimsNotApprovedForAny = sentences.some(
+      (sentence) => notApprovedForAnyPattern.test(sentence) && !jurisdictionPattern.test(sentence)
+    );
 
     const claimsApprovedSpecific =
       /\b(aprovad[ao]\s+pela\s+(fda|anvisa|ema)|fda-approved|aprovad[ao]\s+para\s+(diabetes|dm2|obesidade))\b/i.test(
@@ -157,10 +164,11 @@ export class EvidenceConsistencyGate {
       // 2.3 Stale Active Medication Claim (Generic active vs discontinued reconciliation)
       const isMedsEmpty = /none registered|no active medications/i.test(medsSummary);
       if (isMedsEmpty) {
+        const activeClaimPattern =
+          /\b(j[aá]\s+(?:em\s+uso|ativa|ativo|est[aá]\s+ativo)|continua\b|continue\s+com|mantenha\s+o|mant[eé]m|dose\s+atual\s+(?:de\s+)?\d+)\b/i;
+        // "Continue com a dieta atual" is not a medication claim: require medication context in the same sentence
         const claimsActiveMedication =
-          /\b(j[aá]\s+(?:em\s+uso|ativa|ativo|est[aá]\s+ativo)|continua\b|continue\s+com|mantenha\s+o|mant[eé]m|dose\s+atual\s+(?:de\s+)?\d+)\b/i.test(
-            lowerText
-          ) ||
+          sentences.some((sentence) => activeClaimPattern.test(sentence) && detectTopics(sentence).medication) ||
           /\b(medicamento\s+atual|seu\s+medicamento\s+ativo)\b/i.test(lowerText);
 
         if (claimsActiveMedication) {

@@ -13,8 +13,6 @@ const updateRecommendationSchema = z.object({
   summarySnapshot: z.record(z.any()).optional(),
   changeReason: z.string().min(1, "Change reason is required to maintain clinical audit trail"),
   conversationId: z.string().uuid().optional(),
-  actorType: z.nativeEnum(ActorType).default(ActorType.USER),
-  actorName: z.string().optional(),
 });
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -79,8 +77,6 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       summarySnapshot,
       changeReason,
       conversationId,
-      actorType,
-      actorName,
     } = result.data;
 
     const finalStatus = status || existing.status;
@@ -93,9 +89,10 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       notes,
       changeReason,
       conversationId: conversationId || existing.conversationId,
-      actorType,
-      actorName: actorName || user!.username,
-      informationOrigin: actorType === ActorType.USER ? "USER_REPORTED" : undefined,
+      // Manual edit through the API/UI: provenance fixed server-side
+      actorType: ActorType.USER,
+      actorName: user!.username,
+      informationOrigin: "USER_REPORTED",
       // RecommendationService owns the RECOMMENDATION_VERSION_CREATED audit
       auditContext: { ipAddress: ip, userAgent },
     });

@@ -13,6 +13,7 @@ import { RecommendationService } from "../../src/lib/services/recommendation-ser
 import { db } from "../../src/lib/db";
 
 const SAVE_WEIGHT_AND_PLAN = "Sim. Atualize meu peso para 98 kg e salve o plano proposto no HealthVault.";
+const SAVE_WEIGHT_PLAN_AND_PROTOCOL = "Sim. Atualize meu peso para 98 kg, salve o plano proposto e atualize o protocolo no HealthVault.";
 const PREVIOUS_ASSISTANT = "Você mencionou 98 kg — vault registra 85.7 kg. Quer que eu salve este plano e atualize seu peso?";
 
 describe("Multi-domain turn regressions (commit 216cfbb residuals)", () => {
@@ -42,7 +43,7 @@ describe("Multi-domain turn regressions (commit 216cfbb residuals)", () => {
   describe("2. Weight conflict resolution requires a persisted metric in the same turn", () => {
     const guardFor = (toolName: string, state = createTurnMutationState()) =>
       WriteIntentGuard.check({
-        userMessage: SAVE_WEIGHT_AND_PLAN,
+        userMessage: SAVE_WEIGHT_PLAN_AND_PROTOCOL,
         previousAssistantMessage: PREVIOUS_ASSISTANT,
         toolName,
         toolAccess: "write",

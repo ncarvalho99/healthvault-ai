@@ -16,6 +16,7 @@ import {
   Activity,
   PlusCircle,
 } from "lucide-react";
+import { recommendationOriginLabel } from "@/lib/recommendation-origin";
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
@@ -210,7 +211,7 @@ export default function DashboardPage() {
 
                       <div className="flex items-center justify-between pt-1">
                         <span className="text-xs text-slate-400">
-                          Origem: {latestRec.sourceName || "Assistente de Saúde"}
+                          Origem: {recommendationOriginLabel(latestRec.sourceType, latestRec.sourceName)}
                         </span>
                         <Link
                           href={`/recommendations`}

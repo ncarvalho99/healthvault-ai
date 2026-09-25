@@ -44,7 +44,7 @@ export class ToolSelector {
     const isMetricTopic = topics.metric;
     const isSymptomTopic = topics.symptom;
     const isLabTopic = topics.lab;
-    const isPlanTopic = topics.plan;
+    const isPlanTopic = topics.plan || topics.protocol;
     const isReminderTopic = topics.reminder;
 
     // Union of every detected domain, so multi-domain requests (e.g. "atualize meu peso e salve o plano")

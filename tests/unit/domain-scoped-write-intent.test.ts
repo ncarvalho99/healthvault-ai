@@ -48,10 +48,10 @@ describe("Domain-scoped write intent", () => {
       assert.strictEqual(med.intent, "DOMAIN_NOT_AUTHORIZED");
     });
 
-    it("'salve minha dieta e me recomende medicamentos' saves diet + protocol record, not medications", () => {
+    it("'salve minha dieta e me recomende medicamentos' saves the diet only", () => {
       const msg = "salve minha dieta e me recomende medicamentos";
       assert.strictEqual(guard(msg, "healthvault_update_diet", "nutrition").allowed, true);
-      assert.strictEqual(guard(msg, "healthvault_create_recommendation", "recommendations").allowed, true);
+      assert.strictEqual(guard(msg, "healthvault_create_recommendation", "recommendations").allowed, false);
       assert.strictEqual(guard(msg, "healthvault_update_medication", "medications").allowed, false);
     });
 
@@ -83,7 +83,7 @@ describe("Domain-scoped write intent", () => {
       );
     });
 
-    it("confirmation turn: metric, then diet and the protocol record once the weight is persisted", () => {
+    it("confirmation turn: metric, then diet once the weight is persisted; the protocol needs its own authorization", () => {
       const pending = { reportedWeightKg: 98, vaultWeightKg: 85.7 };
       const state = createTurnMutationState();
       const ctx = { previousAssistantMessage: offer, vaultWeightKg: 85.7, pendingBaselineConflict: pending, turnMutationState: state };
@@ -93,7 +93,9 @@ describe("Domain-scoped write intent", () => {
 
       recordTurnMutation(state, "healthvault_add_body_metric", { success: true, data: { weightKg: 98 } });
       assert.strictEqual(guard(confirm, "healthvault_update_diet", "nutrition", ctx).allowed, true);
-      assert.strictEqual(guard(confirm, "healthvault_update_recommendation", "recommendations", ctx).allowed, true);
+      assert.strictEqual(guard(confirm, "healthvault_update_recommendation", "recommendations", ctx).allowed, false);
+      const withProtocol = "Sim. Atualize meu peso para 98 kg, salve o plano proposto e atualize o protocolo.";
+      assert.strictEqual(guard(withProtocol, "healthvault_update_recommendation", "recommendations", ctx).allowed, true);
       assert.strictEqual(guard(confirm, "healthvault_create_medication", "medications", ctx).allowed, false);
       assert.strictEqual(computePendingBaselineConflict(confirm, 85.7, pending, state), null, "conflict cleared");
     });

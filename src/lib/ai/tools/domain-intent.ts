@@ -19,16 +19,19 @@ export interface TopicFlags {
   symptom: boolean;
   lab: boolean;
   plan: boolean;
+  protocol: boolean;
   reminder: boolean;
 }
 
 const TOPIC_PATTERNS: Record<keyof TopicFlags, RegExp> = {
   diet: /dieta|caloria|macro|prote[ií]na|carbo|gordura|refei[cç][aã]o|alimento|comida|nutri|\bdiet\b|calorie/i,
-  medication: /medicamento|medica[cç][aã]o|rem[eé]dio|dose|dosagem|(?<![a-z])mcg?\b|ozempic|semaglutid|retatrutid|tirzepatid|aplica[cç][aã]o|farm[aá]|medication/i,
+  medication: /medicamento|medica[cç][aã]o|rem[eé]dio|dose|dosagem|(?<![a-z])(?:mg|mcg)\b|ozempic|semaglutid|retatrutid|tirzepatid|aplica[cç][aã]o|farm[aá]|medication/i,
   metric: /peso|pesagem|balan[cç]a|gordura corporal|\bbf\b|cintura|medida|(?<![a-z])kg\b|weight/i,
   symptom: /sintoma|\bdor\b|dores|n[aá]usea|rea[cç][aã]o|efeito|azia|cabe[cç]a|fadiga|tontura|symptom/i,
   lab: /exame|laborat|sangue|glicemia|colesterol|hba1c|tsh|biomarcador/i,
-  plan: /plano|protocolo|recomenda[cç]/i,
+  // A "plano" in this app is the nutrition plan; protocols/recommendations are a separate record
+  plan: /plano/i,
+  protocol: /protocolo|recomenda[cç]|protocol|recommendation/i,
   reminder: /lembrete|lembrar|agend|reminder/i,
 };
 
@@ -46,16 +49,14 @@ export function hasAnyTopic(flags: TopicFlags): boolean {
 
 /**
  * Domains a text explicitly refers to, used to bound what a write instruction authorizes.
- * A "plan/protocol" covers both the diet and its recommendation record.
+ * Least privilege: a nutrition plan authorizes nutrition only; a protocol/recommendation
+ * authorizes recommendations only. Both are authorized only when both are named.
  */
 export function mentionedWriteDomains(text: string): Set<WriteDomain> {
   const t = detectTopics(text);
   const domains = new Set<WriteDomain>();
-  if (t.diet) domains.add("nutrition");
-  if (t.plan) {
-    domains.add("nutrition");
-    domains.add("recommendations");
-  }
+  if (t.diet || t.plan) domains.add("nutrition");
+  if (t.protocol) domains.add("recommendations");
   if (t.medication) domains.add("medications");
   if (t.metric) domains.add("metrics");
   if (t.symptom) domains.add("symptoms");

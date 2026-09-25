@@ -12,6 +12,7 @@ import {
   createTurnMutationState,
   recordTurnMutation,
   computePendingBaselineConflict,
+  resolveWriteScope,
   PendingBaselineConflict,
 } from "@/lib/ai/tools/write-intent-guard";
 import { resolveReasoningPolicy } from "@/lib/ai/response/reasoning-policy";
@@ -21,7 +22,8 @@ import { ResearchOrchestrator } from "@/lib/ai/research/research-orchestrator";
 import { EvidenceConsistencyGate } from "@/lib/ai/response/evidence-consistency-gate";
 import { isHealthAiModel } from "@/lib/ai/models/model-identification";
 import { logAudit } from "@/lib/audit";
-import { SenderType, RecommendationStatus } from "@prisma/client";
+import { SenderType, RecommendationStatus, SourceType } from "@prisma/client";
+import { planFromDietArgs, upsertCurrentPlanSection } from "@/lib/services/protocol-notes";
 
 const chatRequestSchema = z.object({
   conversationId: z.string().uuid("Invalid conversation ID"),
@@ -79,9 +81,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (!integration) {
-      // Fallback to active system integration configured by admin
+      // Fallback to the system integration: only integrations owned by an ADMIN are shared,
+      // never another regular user's integration/API key
       integration = await db.aiIntegration.findFirst({
-        where: { enabled: true },
+        where: { enabled: true, user: { role: "ADMIN" } },
         orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
       });
     }
@@ -279,6 +282,8 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
     const callSignatures = new Set<string>();
     // Writes persisted during this turn (across tool iterations); resolves weight baseline conflicts by real state
     const turnMutationState = createTurnMutationState();
+    // Arguments of the last diet write actually persisted this turn (documents the plan in the protocol)
+    let lastPersistedDietArgs: any = null;
     let hasRegeneratedForConsistency = false;
 
     while (iteration < MAX_TOOL_ITERATIONS) {
@@ -379,6 +384,17 @@ O modo **${activeModel}** opera sob a política **Web-First (REQUIRED)** e exige
           });
 
           recordTurnMutation(turnMutationState, toolName, toolOutput);
+          if (
+            (toolName === "healthvault_create_diet" || toolName === "healthvault_update_diet") &&
+            toolOutput.success &&
+            !toolOutput.requires_approval
+          ) {
+            try {
+              lastPersistedDietArgs = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+            } catch {
+              lastPersistedDietArgs = null;
+            }
+          }
 
           // A call blocked only by an unresolved baseline conflict may be retried after the metric is persisted
           if (toolOutput.error?.code === "BASELINE_CONFLICT") {
@@ -461,22 +477,43 @@ ${consistency.remediationPrompt}`,
       finalAssistantText += "\n\n*(Limite de passos operacionais do assistente atingido).*";
     }
 
-    // 6.8 Every persisted diet plan is documented as a recommendation version (protocol history).
-    // Dispatched through the regular tool pipeline so intent guard, write policy and audit still apply.
-    if (turnMutationState.dietUpdatedThisTurn && !turnMutationState.recommendationHandledThisTurn) {
-      const latestRecommendation = await db.recommendation.findFirst({
-        where: { userId: user!.userId, status: { not: RecommendationStatus.ARCHIVED } },
+    // 6.8 When the user explicitly authorized both the plan and its protocol/recommendation but the model
+    // did not record the protocol, document the persisted plan as a protocol version. Dispatched through the
+    // regular tool pipeline so intent guard, write policy and audit still apply.
+    if (
+      turnMutationState.dietUpdatedThisTurn &&
+      !turnMutationState.recommendationHandledThisTurn &&
+      resolveWriteScope(content, previousAssistantMessage).domains.has("recommendations")
+    ) {
+      // Target: only an AI protocol already versioned in this conversation; otherwise a new protocol.
+      // Never guess among unrelated protocols, and never version user-authored notes.
+      const targetRecommendation = await db.recommendation.findFirst({
+        where: {
+          userId: user!.userId,
+          status: { notIn: [RecommendationStatus.ARCHIVED, RecommendationStatus.USER_NOTE] },
+          sourceType: SourceType.AI_AGENT,
+          versions: { some: { conversationId } },
+        },
         orderBy: { updatedAt: "desc" },
-        select: { id: true },
+        select: { id: true, notes: true },
       });
-      const autoToolName = latestRecommendation ? "healthvault_update_recommendation" : "healthvault_create_recommendation";
-      const autoArgs = latestRecommendation
-        ? { recommendation_id: latestRecommendation.id, reason: "Plano nutricional atualizado nesta conversa" }
+
+      const plan = planFromDietArgs(
+        lastPersistedDietArgs,
+        turnMutationState.updatedWeightKg ?? vaultWeightKg
+      );
+      const reason = plan.reason ? `Plano nutricional atualizado: ${plan.reason}` : "Plano nutricional atualizado nesta conversa";
+      const autoToolName = targetRecommendation ? "healthvault_update_recommendation" : "healthvault_create_recommendation";
+      const autoArgs = targetRecommendation
+        ? {
+            recommendation_id: targetRecommendation.id,
+            notes: upsertCurrentPlanSection(targetRecommendation.notes, plan),
+            reason,
+          }
         : {
             title: "Protocolo Nutricional",
-            notes:
-              "## Protocolo nutricional\n\n- Registrado automaticamente ao salvar o plano nutricional nesta conversa.\n- Metas, medicamentos e peso vigentes estão no snapshot desta versão.",
-            reason: "Plano nutricional salvo nesta conversa",
+            notes: upsertCurrentPlanSection(null, plan),
+            reason,
           };
       const autoToolCallId = `auto_rec_${correlationId}`;
       const autoOutput = await ToolDispatcher.execute({

@@ -153,61 +153,86 @@ const GENERIC_AFFIRMATIVE_PATTERNS = [
 // Clause boundaries: sentence ends, ", " (not decimal commas), and connectives.
 const CLAUSE_SPLIT = /[;!?\n]+|\.(?=\s|$)|,(?=\s)|\s+e\s+|\s+mas\s+|\s+depois\s+|\s+and\s+/i;
 
-/**
- * A protocol record accompanies the plan it documents: authorizing a diet or medication
- * change also authorizes recording the corresponding recommendation version.
- */
-function withProtocolRecord(domains: Set<WriteDomain>): Set<WriteDomain> {
-  if (domains.has("nutrition") || domains.has("medications")) domains.add("recommendations");
-  return domains;
+// A negation shortly before the write verb turns the clause into an explicit refusal
+// ("não salve", "não quero que você registre", "do not save").
+const NEGATION_BEFORE_VERB = /\b(?:n[aã]o|nunca|jamais|nem|sem|not|never|don'?t)\b(?:\s+\S+){0,3}\s*$/i;
+
+/** Index of the first write verb in the clause, or -1. */
+function firstMutationVerbIndex(clause: string): number {
+  let first = -1;
+  for (const p of EXPLICIT_MUTATION_PATTERNS) {
+    const i = clause.search(p);
+    if (i !== -1 && (first === -1 || i < first)) first = i;
+  }
+  return first;
 }
 
 interface WriteScope {
-  mode: "MUTATION" | "CONFIRMATION" | "ADVISORY" | "NONE";
+  mode: "MUTATION" | "CONFIRMATION" | "ADVISORY" | "NEGATED" | "NONE";
   domains: Set<WriteDomain>;
 }
 
 /**
  * Splits the message into clauses and collects the domains named by clauses that carry a
  * write verb. A clause without its own verb inherits the previous clause's mode
- * ("atualize minha dieta e medicação"). A write clause naming no domain ("sim, salve")
- * binds to what the previous assistant turn offered.
+ * ("atualize minha dieta e medicação", "não altere o peso nem a dieta"). A write clause naming
+ * no domain ("sim, salve") binds to what the previous assistant turn offered. Negated clauses
+ * ("não salve a dieta") deny their domains even if another clause names them.
  */
 export function resolveWriteScope(userMessage: string, previousAssistantMessage?: string): WriteScope {
   const trimmed = userMessage.trim();
 
   if (GENERIC_AFFIRMATIVE_PATTERNS.some((p) => p.test(trimmed))) {
     if (!findSaveOfferSentence(previousAssistantMessage)) return { mode: "NONE", domains: new Set() };
-    return { mode: "CONFIRMATION", domains: withProtocolRecord(offeredWriteDomains(previousAssistantMessage)) };
+    return { mode: "CONFIRMATION", domains: offeredWriteDomains(previousAssistantMessage) };
   }
 
   const domains = new Set<WriteDomain>();
-  let lastMode: "MUTATION" | "ADVISORY" | null = null;
+  const denied = new Set<WriteDomain>();
+  let lastMode: "MUTATION" | "ADVISORY" | "NEGATED" | null = null;
   let sawMutation = false;
   let sawAdvisory = false;
+  let sawNegation = false;
   let domainlessMutation = false;
+  let domainlessNegation = false;
 
   for (const clause of trimmed.split(CLAUSE_SPLIT)) {
     if (!clause || !clause.trim()) continue;
-    const isMutation = EXPLICIT_MUTATION_PATTERNS.some((p) => p.test(clause));
-    const isAdvisory = !isMutation && ADVISORY_PATTERNS.some((p) => p.test(clause));
-    const mode: "MUTATION" | "ADVISORY" | null = isMutation ? "MUTATION" : isAdvisory ? "ADVISORY" : lastMode;
-    if (isMutation || isAdvisory) lastMode = mode;
+    const verbIndex = firstMutationVerbIndex(clause);
+    const isNegated = verbIndex !== -1 && NEGATION_BEFORE_VERB.test(clause.slice(0, verbIndex));
+    const isMutation = verbIndex !== -1 && !isNegated;
+    const isAdvisory = verbIndex === -1 && ADVISORY_PATTERNS.some((p) => p.test(clause));
+    const hasOwnMode = isMutation || isNegated || isAdvisory;
+    const mode: "MUTATION" | "ADVISORY" | "NEGATED" | null = isMutation
+      ? "MUTATION"
+      : isNegated
+      ? "NEGATED"
+      : isAdvisory
+      ? "ADVISORY"
+      : lastMode;
+    if (hasOwnMode) lastMode = mode;
     if (isMutation) sawMutation = true;
+    if (isNegated) sawNegation = true;
     if (isAdvisory) sawAdvisory = true;
 
+    const clauseDomains = mentionedWriteDomains(clause);
     if (mode === "MUTATION") {
-      const clauseDomains = mentionedWriteDomains(clause);
       if (clauseDomains.size === 0 && isMutation) domainlessMutation = true;
       clauseDomains.forEach((d) => domains.add(d));
+    } else if (mode === "NEGATED") {
+      if (clauseDomains.size === 0 && isNegated) domainlessNegation = true;
+      clauseDomains.forEach((d) => denied.add(d));
     }
   }
 
-  if (domainlessMutation) {
-    offeredWriteDomains(previousAssistantMessage).forEach((d) => domains.add(d));
-  }
+  const offered = offeredWriteDomains(previousAssistantMessage);
+  if (domainlessMutation) offered.forEach((d) => domains.add(d));
+  if (domainlessNegation) offered.forEach((d) => denied.add(d));
+  denied.forEach((d) => domains.delete(d));
 
-  if (sawMutation) return { mode: "MUTATION", domains: withProtocolRecord(domains) };
+  if (sawMutation && domains.size > 0) return { mode: "MUTATION", domains };
+  if (sawNegation) return { mode: "NEGATED", domains: new Set() };
+  if (sawMutation) return { mode: "MUTATION", domains };
   if (sawAdvisory) return { mode: "ADVISORY", domains: new Set() };
   return { mode: "NONE", domains: new Set() };
 }
@@ -293,6 +318,15 @@ export class WriteIntentGuard {
         intent: "DOMAIN_NOT_AUTHORIZED",
         authorizedDomains,
         reason: `WRITE_INTENT_REQUIRED: O usuário autorizou gravação apenas em: ${authorizedDomains.join(", ") || "nenhum domínio identificado"}. A ferramenta ${toolName} (${toolDomain || "domínio desconhecido"}) não foi autorizada nesta mensagem. Apresente essa parte como sugestão e pergunte explicitamente antes de gravá-la.`,
+      };
+    }
+
+    if (scope.mode === "NEGATED") {
+      return {
+        allowed: false,
+        intent: "NO_WRITE_INTENT",
+        reason:
+          "WRITE_INTENT_REQUIRED: O usuário pediu explicitamente para NÃO gravar esta alteração no HealthVault. Não execute a gravação; responda apenas de forma consultiva.",
       };
     }
 

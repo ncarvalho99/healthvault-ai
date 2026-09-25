@@ -8,6 +8,7 @@ import { VersionDiffModal } from "@/components/recommendations/VersionDiffModal"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Toast } from "@/components/ui/Toast";
 import { Sparkles, GitCommit, Clock, ArrowRight, Plus, History, Trash2, Edit3 } from "lucide-react";
+import { recommendationOriginLabel } from "@/lib/recommendation-origin";
 
 export default function RecommendationsPage() {
   const [recommendations, setRecommendations] = useState<any[]>([]);
@@ -188,7 +189,7 @@ export default function RecommendationsPage() {
                       <div>
                         <h4 className="font-bold text-sm text-slate-100">{rec.title}</h4>
                         <span className="text-xs text-slate-400">
-                          Origem: {rec.sourceName || "AI Health Assistant"}
+                          Origem: {recommendationOriginLabel(rec.sourceType, rec.sourceName)}
                         </span>
                       </div>
                     </div>
