@@ -5,7 +5,9 @@ import { POST } from "../../src/app/api/ai/executions/[id]/approve/route";
 import { createSessionToken } from "../../src/lib/auth";
 import { db } from "../../src/lib/db";
 import { ToolRegistry } from "../../src/lib/ai/tools/registry";
+import { ToolDispatcher } from "../../src/lib/ai/tools/dispatcher";
 import { MedicationService } from "../../src/lib/services/medication-service";
+import { DietService } from "../../src/lib/services/diet-service";
 import { HealthService } from "../../src/lib/services/health-service";
 
 describe("Agent Tool Execution & Approval Runtime Integrity", () => {
@@ -684,5 +686,371 @@ describe("Agent Tool Execution & Approval Runtime Integrity", () => {
     assert.strictEqual(res.status, 500);
     assert.strictEqual(domainMeds.length, 0, "Domain mutation must rollback when toolCallId does not match");
     assert.strictEqual(persistedExecution.status, "PENDING_APPROVAL");
+  });
+
+  it("9. update_diet permanece ligado ao dietPlan original mesmo se outra dieta virar a mais recente", async () => {
+    const token = await createSessionToken({ userId: "user-diet-binding", username: "clinician", role: "USER" });
+
+    // Diet A (original target of proposal)
+    const dietA = { id: "diet-plan-A", title: "Dieta Antiga", currentVersion: 1, isActive: true };
+    // Diet B (newer, most recent active diet)
+    const dietB = { id: "diet-plan-B", title: "Dieta Nova", currentVersion: 1, isActive: true };
+
+    let persistedExecution: any = {
+      id: "exec-diet-binding",
+      userId: "user-diet-binding",
+      conversationId: "conv-diet",
+      messageId: "msg-diet",
+      toolCallId: "call_diet",
+      toolName: "healthvault_update_diet",
+      status: "PENDING_APPROVAL",
+      requiresApproval: true,
+      inputJson: {
+        target_calories: 2100,
+        target_protein_g: 160,
+        target_carbs_g: 200,
+        target_fat_g: 70,
+        _proposalMeta: {
+          entityId: "diet-plan-A", // Captured Diet A!
+          entityType: "diet",
+          entityVersionAtProposal: 1,
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        },
+      },
+    };
+
+    let persistedMessage: any = {
+      id: "msg-diet",
+      conversationId: "conv-diet",
+      senderType: "AI",
+      metadata: {
+        toolExecutions: [
+          { toolCallId: "call_diet", output: { requires_approval: true, execution_id: "exec-diet-binding" } },
+        ],
+      },
+    };
+
+    (db.user.findUnique as any) = async () => ({ id: "user-diet-binding", username: "clinician", role: "USER" });
+    (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
+
+    let updatedDietId: string | null = null;
+
+    (db.$transaction as any) = async (callback: any) => {
+      const tx = {
+        aiToolExecution: {
+          updateMany: async () => ({ count: 1 }),
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
+        dietPlan: {
+          findUnique: async ({ where }: any) => {
+            if (where.id === "diet-plan-A") return dietA;
+            if (where.id === "diet-plan-B") return dietB;
+            return null;
+          },
+          findFirst: async ({ where }: any) => {
+            if (where?.id === "diet-plan-A") return dietA;
+            if (where?.id === "diet-plan-B") return dietB;
+            return dietB;
+          },
+          update: async ({ where, data }: any) => {
+            updatedDietId = where.id;
+            if (where.id === "diet-plan-A") {
+              dietA.currentVersion = data.currentVersion;
+              return dietA;
+            }
+            if (where.id === "diet-plan-B") {
+              dietB.currentVersion = data.currentVersion;
+              return dietB;
+            }
+            return null;
+          },
+        },
+        dietVersion: {
+          create: async ({ data }: any) => ({ id: "ver-new", ...data }),
+        },
+        auditLog: { create: async () => ({ id: "a" }) },
+        message: {
+          findUnique: async () => persistedMessage,
+          findMany: async () => [persistedMessage],
+          update: async ({ data }: any) => {
+            persistedMessage = { ...persistedMessage, ...data };
+            return persistedMessage;
+          },
+        },
+      };
+      return await callback(tx);
+    };
+
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-diet-binding/approve", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "approve" }),
+    });
+
+    const res = await POST(req, { params: { id: "exec-diet-binding" } });
+    const body = await res.json();
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(body.status, "EXECUTED");
+
+    // CRITICAL: Must have updated Diet A (the proposal target), NOT Diet B!
+    assert.strictEqual(updatedDietId, "diet-plan-A", "Approval must mutate the exact dietPlanId captured in _proposalMeta.entityId");
+    assert.strictEqual(dietA.currentVersion, 2, "Diet A version must increment to 2");
+    assert.strictEqual(dietB.currentVersion, 1, "Diet B version must remain 1");
+  });
+
+  it("10. stop_medication captura entityId/version no ToolDispatcher", async () => {
+    let createdExecInput: any = null;
+
+    const origExecCreate = db.aiToolExecution.create;
+    const origExecFindFirstLocal = db.aiToolExecution.findFirst;
+    const origMedFindFirst = db.medication.findFirst;
+    const origPolicyFindUnique = db.aiWritePolicy.findUnique;
+
+    (db.aiToolExecution.findFirst as any) = async () => null;
+    (db.aiWritePolicy.findUnique as any) = async () => ({ medications: "REVIEW_FIRST" });
+
+    (db.aiToolExecution.create as any) = async ({ data }: any) => {
+      createdExecInput = data.inputJson;
+      return { id: "exec-stop-created", ...data };
+    };
+
+    (db.medication.findFirst as any) = async () => ({
+      id: "med-exact-uuid-888",
+      name: "Ozempic",
+      isActive: true,
+      versions: [{ versionNumber: 3, doseValue: 1.0, doseUnit: "mg" }],
+    });
+
+    try {
+      const res = await ToolDispatcher.execute({
+        userId: "user-dispatcher-test",
+        conversationId: "conv-disp",
+        toolCallId: "call_disp_stop",
+        toolName: "healthvault_stop_medication",
+        rawArguments: JSON.stringify({
+          medication_id: "Ozempic",
+          reason: "Efeito adverso intolerável",
+        }),
+      });
+
+      assert.strictEqual(res.requires_approval, true);
+      assert.ok(createdExecInput);
+      assert.ok(createdExecInput._proposalMeta);
+
+      // CRITICAL: Must have captured entityId, entityType='medication', and entityVersionAtProposal=3
+      assert.strictEqual(createdExecInput._proposalMeta.entityId, "med-exact-uuid-888");
+      assert.strictEqual(createdExecInput._proposalMeta.entityType, "medication");
+      assert.strictEqual(createdExecInput._proposalMeta.entityVersionAtProposal, 3);
+    } finally {
+      db.aiToolExecution.create = origExecCreate;
+      db.aiToolExecution.findFirst = origExecFindFirstLocal;
+      db.medication.findFirst = origMedFindFirst;
+      db.aiWritePolicy.findUnique = origPolicyFindUnique;
+    }
+  });
+
+  it("11. medication version changes before stop approval → VERSION_CONFLICT", async () => {
+    const token = await createSessionToken({ userId: "user-stop-conflict", username: "clinician", role: "USER" });
+
+    let persistedExecution: any = {
+      id: "exec-stop-conflict",
+      userId: "user-stop-conflict",
+      conversationId: "conv-stop",
+      messageId: "msg-stop",
+      toolCallId: "call_stop_conflict",
+      toolName: "healthvault_stop_medication",
+      status: "PENDING_APPROVAL",
+      requiresApproval: true,
+      inputJson: {
+        medication_id: "med-stop-uuid-777",
+        reason: "Descontinuar",
+        _proposalMeta: {
+          entityId: "med-stop-uuid-777",
+          entityType: "medication",
+          entityVersionAtProposal: 1, // Was v1 when proposal was generated
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        },
+      },
+    };
+
+    let persistedMessage: any = {
+      id: "msg-stop",
+      conversationId: "conv-stop",
+      senderType: "AI",
+      metadata: {
+        toolExecutions: [
+          { toolCallId: "call_stop_conflict", output: { requires_approval: true, execution_id: "exec-stop-conflict" } },
+        ],
+      },
+    };
+
+    let stopVersionCreated = false;
+
+    (db.user.findUnique as any) = async () => ({ id: "user-stop-conflict", username: "clinician", role: "USER" });
+    (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
+
+    (db.$transaction as any) = async (callback: any) => {
+      const tx = {
+        aiToolExecution: {
+          updateMany: async () => ({ count: 1 }),
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
+        medication: {
+          findUnique: async () => ({
+            id: "med-stop-uuid-777",
+            name: "Ozempic",
+            versions: [{ versionNumber: 2 }], // In DB version moved to 2!
+          }),
+          update: async () => {
+            stopVersionCreated = true;
+          },
+        },
+        medicationVersion: {
+          create: async () => {
+            stopVersionCreated = true;
+            return { id: "v" };
+          },
+        },
+        auditLog: { create: async () => ({ id: "a" }) },
+        message: {
+          findUnique: async () => persistedMessage,
+          findMany: async () => [persistedMessage],
+          update: async ({ data }: any) => {
+            persistedMessage = { ...persistedMessage, ...data };
+            return persistedMessage;
+          },
+        },
+      };
+      return await callback(tx);
+    };
+
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-stop-conflict/approve", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "approve" }),
+    });
+
+    const res = await POST(req, { params: { id: "exec-stop-conflict" } });
+    const body = await res.json();
+
+    assert.strictEqual(res.status, 409);
+    assert.strictEqual(body.code, "VERSION_CONFLICT");
+
+    // Execution must be marked FAILED, not PENDING_APPROVAL
+    assert.strictEqual(persistedExecution.status, "FAILED");
+    assert.strictEqual(persistedExecution.errorCode, "VERSION_CONFLICT");
+
+    // No discontinuation version created
+    assert.strictEqual(stopVersionCreated, false, "No discontinuation mutation must occur when version conflict is detected");
+  });
+
+  it("12. duplicate medication names cannot redirect an approved proposal to another medication", async () => {
+    const token = await createSessionToken({ userId: "user-dup-med", username: "clinician", role: "USER" });
+
+    // Two medications with identical names in DB
+    const medA = { id: "med-uuid-A", name: "Ozempic", versions: [{ versionNumber: 1, doseValue: 0.25, doseUnit: "mg" }] };
+    const medB = { id: "med-uuid-B", name: "Ozempic", versions: [{ versionNumber: 1, doseValue: 1.0, doseUnit: "mg" }] };
+
+    let persistedExecution: any = {
+      id: "exec-dup-med",
+      userId: "user-dup-med",
+      conversationId: "conv-dup",
+      messageId: "msg-dup",
+      toolCallId: "call_dup",
+      toolName: "healthvault_update_medication",
+      status: "PENDING_APPROVAL",
+      requiresApproval: true,
+      inputJson: {
+        medication_id: "Ozempic", // Name passed by AI
+        dose_value: 0.5,
+        _proposalMeta: {
+          entityId: "med-uuid-A", // Captured medA as target!
+          entityType: "medication",
+          entityVersionAtProposal: 1,
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        },
+      },
+    };
+
+    let persistedMessage: any = {
+      id: "msg-dup",
+      conversationId: "conv-dup",
+      senderType: "AI",
+      metadata: {
+        toolExecutions: [
+          { toolCallId: "call_dup", output: { requires_approval: true, execution_id: "exec-dup-med" } },
+        ],
+      },
+    };
+
+    let updatedMedicationId: string | null = null;
+
+    (db.user.findUnique as any) = async () => ({ id: "user-dup-med", username: "clinician", role: "USER" });
+    (db.aiToolExecution.findFirst as any) = async () => persistedExecution;
+
+    (db.$transaction as any) = async (callback: any) => {
+      const tx = {
+        aiToolExecution: {
+          updateMany: async () => ({ count: 1 }),
+          update: async ({ data }: any) => {
+            persistedExecution = { ...persistedExecution, ...data };
+            return persistedExecution;
+          },
+        },
+        medication: {
+          findUnique: async ({ where }: any) => {
+            if (where.id === "med-uuid-A") return medA;
+            if (where.id === "med-uuid-B") return medB;
+            return null;
+          },
+          findFirst: async ({ where }: any) => {
+            if (where?.id === "med-uuid-A") return medA;
+            if (where?.id === "med-uuid-B") return medB;
+            // If name-based lookup was accidentally used, it would return medB!
+            return medB;
+          },
+          update: async ({ where }: any) => {
+            updatedMedicationId = where.id;
+            return medA;
+          },
+        },
+        medicationVersion: {
+          update: async () => {},
+          create: async ({ data }: any) => ({ id: "ver-new", ...data }),
+        },
+        auditLog: { create: async () => ({ id: "a" }) },
+        message: {
+          findUnique: async () => persistedMessage,
+          findMany: async () => [persistedMessage],
+          update: async ({ data }: any) => {
+            persistedMessage = { ...persistedMessage, ...data };
+            return persistedMessage;
+          },
+        },
+      };
+      return await callback(tx);
+    };
+
+    const req = new NextRequest("http://localhost:3000/api/ai/executions/exec-dup-med/approve", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "approve" }),
+    });
+
+    const res = await POST(req, { params: { id: "exec-dup-med" } });
+    const body = await res.json();
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(body.status, "EXECUTED");
+
+    // CRITICAL: Must have updated medA (the proposal target), NEVER medB!
+    assert.strictEqual(updatedMedicationId, "med-uuid-A", "Must bind strictly to _proposalMeta.entityId, ignoring duplicate name lookups");
   });
 });

@@ -134,7 +134,7 @@ export class ToolDispatcher {
       let targetEntityId: string | undefined = undefined;
       let entityType: string = tool.category;
 
-      if (tool.name === "healthvault_update_medication") {
+      if (tool.name === "healthvault_update_medication" || tool.name === "healthvault_stop_medication") {
         const medId = validation.data.medication_id;
         let med = await db.medication.findFirst({
           where: { id: medId, userId },

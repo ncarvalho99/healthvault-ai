@@ -448,8 +448,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         }, tx);
         outputResult = { entity: "medication", id: created.id, name: created.name, version: 1 };
       } else if (execution.toolName === "healthvault_update_medication") {
-        let med = await MedicationService.getById(user!.userId, args.medication_id, tx);
-        if (!med) med = await MedicationService.findByName(user!.userId, args.medication_id, tx);
+        const targetMedId = meta?.entityId || args.medication_id;
+        let med = await MedicationService.getById(user!.userId, targetMedId, tx);
+        if (!med && !meta?.entityId) med = await MedicationService.findByName(user!.userId, args.medication_id, tx);
         if (!med) throw new Error("Medicamento associado não encontrado.");
 
         const updatedMed = await MedicationService.updateDose(user!.userId, {
@@ -468,8 +469,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         }, tx);
         outputResult = { entity: "medication", id: med.id, name: med.name, version: updatedMed.version.versionNumber };
       } else if (execution.toolName === "healthvault_stop_medication") {
-        let med = await MedicationService.getById(user!.userId, args.medication_id, tx);
-        if (!med) med = await MedicationService.findByName(user!.userId, args.medication_id, tx);
+        const targetMedId = meta?.entityId || args.medication_id;
+        let med = await MedicationService.getById(user!.userId, targetMedId, tx);
+        if (!med && !meta?.entityId) med = await MedicationService.findByName(user!.userId, args.medication_id, tx);
         if (!med) throw new Error("Medicamento associado não encontrado.");
 
         const stoppedMed = await MedicationService.stopMedication(
@@ -492,8 +494,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         }, tx);
         outputResult = { entity: "recommendation", id: created.id, title: created.title, version: 1 };
       } else if (execution.toolName === "healthvault_update_recommendation") {
+        const targetRecId = meta?.entityId || args.recommendation_id;
         const existing = await tx.recommendation.findFirst({
-          where: { id: args.recommendation_id, userId: user!.userId },
+          where: { id: targetRecId, userId: user!.userId },
           include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
         });
         if (!existing) throw new Error("Recomendação associada não encontrada.");
@@ -524,8 +527,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         }, tx);
         outputResult = { entity: "diet", id: createdDiet.id, version: 1 };
       } else if (execution.toolName === "healthvault_update_diet") {
+        const targetDietId = meta?.entityId || args.diet_plan_id;
         const updatedDiet = await DietService.update(user!.userId, {
-          dietPlanId: args.diet_plan_id,
+          dietPlanId: targetDietId,
           targetCalories: args.target_calories,
           targetProteinG: args.target_protein_g,
           targetCarbsG: args.target_carbs_g,
