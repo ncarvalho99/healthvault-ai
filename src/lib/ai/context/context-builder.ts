@@ -1,4 +1,4 @@
-import { HealthService } from "../../services/health-service";
+﻿import { HealthService } from "../../services/health-service";
 import { db } from "../../db";
 import { isHealthAiModel } from "../models/model-identification";
 
@@ -235,6 +235,28 @@ ${conversation?.summary ? `- Conversation Summary: ${conversation.summary}` : ""
       role: "system",
       content: systemPromptText,
     });
+
+    // 6a. For health-ai combo: the combo system_message override in OmniRoute replaces
+    // the system message above, stripping <healthvault_data> and <web_research> from context.
+    // Inject a synthetic user/assistant pair INSIDE the message history so vault data
+    // survives the combo override and the model can ground medical recommendations on it.
+    const isHealthAiCombo = isHealthAiModel(options.activeModel);
+    if (isHealthAiCombo && healthContextText.trim().length > 0) {
+      const vaultDataBlock = [
+        healthContextText.trim(),
+        options.researchContextBlock?.trim() ? options.researchContextBlock.trim() : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      messages.push({
+        role: "user",
+        content: `[HEALTHVAULT_CONTEXT]\n${vaultDataBlock}\n[/HEALTHVAULT_CONTEXT]`,
+      });
+      messages.push({
+        role: "assistant",
+        content: "[MAHI68]\n\nHealthVault context received. Records loaded. Ready.",
+      });
+    }
 
     for (const msg of trimmedMessages) {
       if (msg.senderType === "USER") {
